@@ -130,3 +130,17 @@ blockquote.ask-quote {
   color: var(--muted);
   font-size: 0.92rem;
 }
+
+pre.report {
+  white-space: pre-wrap;
+  line-height: 1.7;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92rem;
+}
+.skill-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}

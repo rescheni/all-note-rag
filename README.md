@@ -87,7 +87,7 @@ P0 使用 `simple` 配置 + **双 gram** 写入 `chunks.fts`（应用层把 CJK 
 
 - 永不写回源 vault
 - GET preview 只读 `preview/` 与 `canonical/` + DB，不打源 S3
-- 无 Skills / Growth API。问答为抽取式（可选 Chat Completions）
+- 问答为抽取式（可选 Chat Completions）。Growth 仅个人空间。
 - e2ee=true → 连接状态 `encrypted_unreadable`，跳过正文
 - 忽略 `.obsidian/` 与 `.trash/`
 
@@ -101,8 +101,13 @@ packages/core
 packages/adapters   Obsidian S3
 packages/normalize
 packages/preview
-packages/retrieve   FTS 召回 + 抽取式问答
+packages/retrieve        FTS 召回 + 抽取式问答
+packages/skills-runtime  解析 SKILL.md，P1 进程内执行
+apps/skill-runner        薄 CLI（parse / hooks）
+skills/growth-weekly     官方成长周报 Skill
 ```
+
+P1 在 worker 成功 upsert 后对个人空间跑 `post-sync` 抽取；`/v1/spaces/:id/growth/report` 走 `weekly-report`。Skill 看不到 Connection 密钥，不写回编辑器。
 
 ## 实现备注
 

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { ensureSkillOnSpace } from "@note-hub/skills-runtime";
 import { query, withTx } from "../db.ts";
 import { errors, jsonError } from "../errors.ts";
 import { hashPassword, requireUser, setSessionCookie, signToken, verifyPassword, type AuthUser } from "../auth.ts";
@@ -41,6 +42,11 @@ authRoutes.post("/auth/register", async (c) => {
     );
     return { user, space };
   });
+  try {
+    await ensureSkillOnSpace(query, out.space.id, "growth-weekly");
+  } catch (e) {
+    console.error(JSON.stringify({ level: "error", message: "auto-install growth-weekly failed", error: String(e) }));
+  }
   const token = signToken(out.user.id);
   setSessionCookie(c, token);
   return c.json({ user: out.user, space: out.space, token }, 201);

@@ -31,6 +31,9 @@ importers:
       '@note-hub/retrieve':
         specifier: workspace:*
         version: link:../../packages/retrieve
+      '@note-hub/skills-runtime':
+        specifier: workspace:*
+        version: link:../../packages/skills-runtime
       bullmq:
         specifier: ^5.52.2
         version: 5.81.4
@@ -56,6 +59,19 @@ importers:
       vitest:
         specifier: ^2.1.9
         version: 2.1.9(@types/node@22.20.1)
+
+  apps/skill-runner:
+    dependencies:
+      '@note-hub/skills-runtime':
+        specifier: workspace:*
+        version: link:../../packages/skills-runtime
+    devDependencies:
+      tsx:
+        specifier: ^4.19.3
+        version: 4.23.13
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
 
   apps/web:
     dependencies:
@@ -99,6 +115,9 @@ importers:
       '@note-hub/preview':
         specifier: workspace:*
         version: link:../../packages/preview
+      '@note-hub/skills-runtime':
+        specifier: workspace:*
+        version: link:../../packages/skills-runtime
       bullmq:
         specifier: ^5.52.2
         version: 5.81.4
@@ -187,6 +206,19 @@ importers:
       '@note-hub/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/skills-runtime:
+    dependencies:
+      yaml:
+        specifier: ^2.7.0
+        version: 2.9.0
     devDependencies:
       typescript:
         specifier: ^5.8.2

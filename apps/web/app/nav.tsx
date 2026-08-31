@@ -16,6 +16,8 @@ export function Nav() {
             <Link href="/notes">笔记</Link>
             <Link href="/search">搜索</Link>
             <Link href="/ask">问答</Link>
+            <Link href="/growth">成长</Link>
+            <Link href="/skills">Skills</Link>
             <Link href="/connections/new">接入</Link>
             <a
               href="#"

@@ -16,4 +16,5 @@ export const errors = {
   encrypted: (c: Context) =>
     jsonError(c, 409, "connection_encrypted", "该连接为端到端加密，无法读取正文"),
   syncInProgress: (c: Context) => jsonError(c, 409, "sync_in_progress", "该连接正在同步"),
+  growthPersonalOnly: (c: Context) => jsonError(c, 400, "growth_personal_only", "成长分析仅用于个人空间"),
 };

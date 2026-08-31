@@ -16,6 +16,12 @@ import { sha256Hex } from "@note-hub/core";
 import { query } from "./db.ts";
 import { env } from "./env.ts";
 import { putHub } from "./s3.ts";
+import { runPostSyncGrowth, type UpsertedNote } from "./post-sync-growth.ts";
+
+type ProcessResult =
+  | { status: "skip" }
+  | { status: "delete" }
+  | { status: "upsert"; note: UpsertedNote };
 
 async function loadSecrets(conn: ConnectionRecord): Promise<ConnectionSecrets | null> {
   const mode = conn.mode || conn.config?.mode;
@@ -107,14 +113,14 @@ async function processNote(
   ctx: AdapterContext,
   sourceId: string,
   path: string,
-): Promise<"upsert" | "skip" | "delete"> {
+): Promise<ProcessResult> {
   const payload = await adapter.fetchNote(ctx, sourceId);
   if (!payload) {
     await query(
       "UPDATE notes SET deleted_at = now(), updated_at = now() WHERE connection_id = $1 AND source_id = $2 AND deleted_at IS NULL",
       [conn.id, sourceId],
     );
-    return "delete";
+    return { status: "delete" };
   }
   const extraAssets = [];
   for (const a of payload.assets ?? []) {
@@ -145,7 +151,7 @@ async function processNote(
   );
   const row = existing.rows[0];
   if (row && row.hash === note.hash && !(await isDeleted(row.id))) {
-    return "skip";
+    return { status: "skip" };
   }
 
   const mdBytes = Buffer.byteLength(note.markdown, "utf8");
@@ -214,7 +220,17 @@ async function processNote(
   });
   await putHub(`preview/${conn.space_id}/${noteId}/${note.hash}.html`, html, "text/html; charset=utf-8");
   void referencedAssetPaths;
-  return "upsert";
+  return {
+    status: "upsert",
+    note: {
+      noteId,
+      path: note.path,
+      title: note.title,
+      markdown: note.markdown,
+      frontmatter: note.frontmatter ?? {},
+      hash: note.hash,
+    },
+  };
 }
 
 async function isDeleted(id: string): Promise<boolean> {
@@ -289,12 +305,15 @@ export async function runSync(connectionId: string): Promise<void> {
       }
     }
 
+    const upsertedNotes: UpsertedNote[] = [];
     for (const ch of upsertsList) {
       if (conn.source === "obsidian" && (!ch.path || !isMarkdownPath(ch.path))) continue;
       try {
         const result = await processNote(conn, adapter, ctx, ch.source_id, ch.path ?? ch.source_id);
-        if (result === "upsert") upserts++;
-        else if (result === "skip") skipped++;
+        if (result.status === "upsert") {
+          upserts++;
+          upsertedNotes.push(result.note);
+        } else if (result.status === "skip") skipped++;
         else deletes++;
       } catch (e) {
         failed++;
@@ -321,6 +340,15 @@ export async function runSync(connectionId: string): Promise<void> {
         failed,
       }),
     );
+    if (upsertedNotes.length) {
+      try {
+        await runPostSyncGrowth(conn.space_id, upsertedNotes);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(JSON.stringify({ level: "error", message: "post-sync growth failed", error: msg }));
+        await log(null, null, "warn", "post-sync growth: " + msg);
+      }
+    }
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const last = isHubError(e) ? `${e.code}: ${e.message}` : message;

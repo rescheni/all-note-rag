@@ -8,6 +8,8 @@ import { spaceRoutes } from "./routes/spaces.ts";
 import { connectionRoutes } from "./routes/connections.ts";
 import { noteRoutes } from "./routes/notes.ts";
 import { askRoutes } from "./routes/ask.ts";
+import { growthRoutes } from "./routes/growth.ts";
+import { skillRoutes } from "./routes/skills.ts";
 import { jsonError } from "./errors.ts";
 import { enqueueSync } from "./queue.ts";
 import { query } from "./db.ts";
@@ -36,6 +38,8 @@ v1.route("/", spaceRoutes);
 v1.route("/", connectionRoutes);
 v1.route("/", noteRoutes);
 v1.route("/", askRoutes);
+v1.route("/", growthRoutes);
+v1.route("/", skillRoutes);
 app.route("/v1", v1);
 
 app.notFound((c) => jsonError(c, 404, "not_found", "未找到"));
