@@ -3,6 +3,7 @@ import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api, getToken } from "@/lib/api";
+import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
 
 const SOURCES = [
   { id: "obsidian", label: "Obsidian" },
@@ -18,7 +19,7 @@ function NewConnectionForm() {
   const sourceParam = (sp.get("source") || "") as SourceId | "";
   const [source, setSource] = useState<SourceId | "">(sourceParam);
   const [syMode, setSyMode] = useState<"api" | "workspace">("api");
-  const [spaceId, setSpaceId] = useState("");
+  const [space, setSpace] = useState<Space | null>(null);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -28,7 +29,7 @@ function NewConnectionForm() {
 
   useEffect(() => {
     if (!getToken()) { location.href = "/login"; return; }
-    api<{ spaces: { id: string }[] }>("/v1/spaces").then((s) => setSpaceId(s.spaces[0]?.id ?? ""));
+    loadSpaces().then(({ current }) => setSpace(current)).catch((e) => setErr(e instanceof Error ? e.message : "加载失败"));
   }, []);
 
   const title = useMemo(() => {
@@ -44,6 +45,8 @@ function NewConnectionForm() {
     setErr("");
     setMsg("");
     if (!source) { setErr("请选择一个源"); return; }
+    if (!space?.id) { setErr("请先选择空间"); return; }
+    if (space.role === "viewer") { setErr("只读成员不能创建连接"); return; }
     const fd = new FormData(e.currentTarget);
     let body: Record<string, unknown> = { source };
     if (source === "obsidian") {
@@ -101,7 +104,7 @@ function NewConnectionForm() {
       };
     }
     try {
-      const conn = await api<{ connection: { id: string } }>(`/v1/spaces/${spaceId}/connections`, {
+      const conn = await api<{ connection: { id: string } }>(`/v1/spaces/${space?.id}/connections`, {
         method: "POST",
         body: JSON.stringify(body),
       });
@@ -124,6 +127,8 @@ function NewConnectionForm() {
     <div className="card" style={{ maxWidth: 620 }}>
       <h1>{title}</h1>
       <p className="readonly-banner">中枢只读，不写回。</p>
+      {space && <p className="muted">当前空间：{space.name}（{spaceKindLabel(space.kind)}）</p>}
+      {space && space.role === "viewer" && <p className="err">只读成员不能创建连接。</p>}
       <div className="source-picker">
         {SOURCES.map((s) => (
           <Link

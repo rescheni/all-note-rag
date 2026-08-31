@@ -2,6 +2,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
+import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
 
 type Citation = {
   note_id: string;
@@ -19,7 +20,7 @@ type AskOut = {
 };
 
 export default function AskPage() {
-  const [spaceId, setSpaceId] = useState("");
+  const [space, setSpace] = useState<Space | null>(null);
   const [busy, setBusy] = useState(false);
   const [out, setOut] = useState<AskOut | null>(null);
   const [err, setErr] = useState("");
@@ -29,16 +30,19 @@ export default function AskPage() {
       location.href = "/login";
       return;
     }
-    api<{ spaces: { id: string }[] }>("/v1/spaces").then((s) => setSpaceId(s.spaces[0]?.id ?? ""));
+    loadSpaces()
+      .then(({ current }) => setSpace(current))
+      .catch((e) => setErr(e instanceof Error ? e.message : "加载失败"));
   }, []);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!space) return;
     const query = String(new FormData(e.currentTarget).get("query") ?? "").trim();
     setErr("");
     setBusy(true);
     try {
-      const res = await api<AskOut>(`/v1/spaces/${spaceId}/ask`, {
+      const res = await api<AskOut>(`/v1/spaces/${space.id}/ask`, {
         method: "POST",
         body: JSON.stringify({ query }),
       });
@@ -54,9 +58,10 @@ export default function AskPage() {
     <>
       <h1>问答</h1>
       <p className="readonly-banner">中枢只读。回答来自当前空间已同步的笔记，不会写回任何源。</p>
+      {space && <p className="muted">当前空间：{space.name}（{spaceKindLabel(space.kind)}）</p>}
       <form className="search-bar card" onSubmit={onSubmit}>
         <input name="query" type="text" placeholder="问当前空间的笔记…" required />
-        <button type="submit" disabled={busy || !spaceId}>{busy ? "检索中…" : "提问"}</button>
+        <button type="submit" disabled={busy || !space}>{busy ? "检索中…" : "提问"}</button>
       </form>
       {err && <p className="err">{err}</p>}
       {out && (

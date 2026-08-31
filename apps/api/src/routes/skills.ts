@@ -7,7 +7,7 @@ import {
 } from "@note-hub/skills-runtime";
 import { query } from "../db.ts";
 import { errors, jsonError } from "../errors.ts";
-import { loadMembership, requireUser, type AuthUser } from "../auth.ts";
+import { requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
 
 type Vars = { user: AuthUser };
 export const skillRoutes = new Hono<{ Variables: Vars }>();
@@ -31,9 +31,9 @@ skillRoutes.get("/skills", async (c) => {
 skillRoutes.post("/spaces/:id/skills/install", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
-  const mem = await loadMembership(user.id, spaceId);
-  if (!mem) return errors.notFound(c);
-  if (mem.role !== "owner") return errors.forbidden(c, "仅空间所有者可安装 Skill");
+  const gate = await requireRole(user.id, spaceId, "owner");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
   const body = (await c.req.json().catch(() => ({}))) as { skill_id?: string; version?: string };
   const skillId = (body.skill_id ?? "").trim();
   if (skillId !== "growth-weekly") {
@@ -51,9 +51,9 @@ skillRoutes.post("/spaces/:id/skills/:skillId/enable", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
   const skillId = c.req.param("skillId");
-  const mem = await loadMembership(user.id, spaceId);
-  if (!mem) return errors.notFound(c);
-  if (mem.role !== "owner") return errors.forbidden(c, "仅空间所有者可启停 Skill");
+  const gate = await requireRole(user.id, spaceId, "owner");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
   const body = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
   if (typeof body.enabled !== "boolean") {
     return jsonError(c, 400, "invalid_request", "需要 enabled: true|false");

@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
+import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
 
 type EventRow = {
   id: string;
@@ -21,7 +22,7 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 export default function GrowthPage() {
-  const [spaceId, setSpaceId] = useState("");
+  const [space, setSpace] = useState<Space | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [report, setReport] = useState("");
   const [err, setErr] = useState("");
@@ -39,11 +40,11 @@ export default function GrowthPage() {
     }
     (async () => {
       try {
-        const s = await api<{ spaces: { id: string; kind: string }[] }>("/v1/spaces");
-        const sp = s.spaces.find((x) => x.kind === "personal") ?? s.spaces[0];
-        if (!sp) return;
-        setSpaceId(sp.id);
-        await load(sp.id);
+        const { current } = await loadSpaces();
+        if (!current) return;
+        setSpace(current);
+        if (current.kind === "team") return;
+        await load(current.id);
       } catch (e) {
         setErr(e instanceof Error ? e.message : "加载失败");
       }
@@ -51,10 +52,11 @@ export default function GrowthPage() {
   }, []);
 
   async function generate() {
+    if (!space) return;
     setErr("");
     setBusy(true);
     try {
-      const r = await api<{ markdown: string }>(`/v1/spaces/${spaceId}/growth/report`);
+      const r = await api<{ markdown: string }>(`/v1/spaces/${space.id}/growth/report`);
       setReport(r.markdown);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "生成失败");
@@ -63,40 +65,48 @@ export default function GrowthPage() {
     }
   }
 
+  const team = space?.kind === "team";
+
   return (
     <>
       <h1>成长</h1>
       <p className="readonly-banner">成长分析仅用于个人空间。中枢只读，不写回任何源。</p>
+      {space && <p className="muted">当前空间：{space.name}（{spaceKindLabel(space.kind)}）</p>}
+      {team && <p className="err">成长分析仅用于个人空间</p>}
       {err && <p className="err">{err}</p>}
-      <p>
-        <button type="button" onClick={generate} disabled={busy || !spaceId}>
-          {busy ? "生成中…" : "生成本周周报"}
-        </button>
-      </p>
-      {report && (
-        <div className="card">
-          <h2>周报</h2>
-          <pre className="report">{report}</pre>
-        </div>
+      {!team && (
+        <>
+          <p>
+            <button type="button" onClick={generate} disabled={busy || !space}>
+              {busy ? "生成中…" : "生成本周周报"}
+            </button>
+          </p>
+          {report && (
+            <div className="card">
+              <h2>周报</h2>
+              <pre className="report">{report}</pre>
+            </div>
+          )}
+          <div className="card">
+            <h2>事件</h2>
+            {events.length === 0 && <p className="muted">还没有成长事件。同步带目标/习惯标签的日记后会出现在这里。</p>}
+            <ul className="list">
+              {events.map((e) => (
+                <li key={e.id}>
+                  <strong>{KIND_LABEL[e.kind] ?? e.kind}</strong>
+                  {" "}
+                  {e.note_id ? (
+                    <Link href={`/notes/${e.note_id}`}>{e.payload?.title || e.note_title || e.note_id}</Link>
+                  ) : (
+                    e.payload?.title || "手工事件"
+                  )}
+                  <div className="muted">{new Date(e.happened_at).toLocaleString()}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
       )}
-      <div className="card">
-        <h2>事件</h2>
-        {events.length === 0 && <p className="muted">还没有成长事件。同步带目标/习惯标签的日记后会出现在这里。</p>}
-        <ul className="list">
-          {events.map((e) => (
-            <li key={e.id}>
-              <strong>{KIND_LABEL[e.kind] ?? e.kind}</strong>
-              {" "}
-              {e.note_id ? (
-                <Link href={`/notes/${e.note_id}`}>{e.payload?.title || e.note_title || e.note_id}</Link>
-              ) : (
-                e.payload?.title || "手工事件"
-              )}
-              <div className="muted">{new Date(e.happened_at).toLocaleString()}</div>
-            </li>
-          ))}
-        </ul>
-      </div>
     </>
   );
 }

@@ -85,7 +85,21 @@ export function setSessionCookie(c: Context, token: string) {
   );
 }
 
-export type Membership = { space_id: string; role: "owner" | "editor" | "viewer" };
+export type SpaceRole = "owner" | "editor" | "viewer";
+export type Membership = { space_id: string; role: SpaceRole };
+
+const ROLE_RANK: Record<SpaceRole, number> = { viewer: 0, editor: 1, owner: 2 };
+
+export function isSpaceRole(value: string): value is SpaceRole {
+  return value === "owner" || value === "editor" || value === "viewer";
+}
+
+/** Check a (possibly missing) membership against the minimum role. */
+export function checkRole(mem: Membership | null | undefined, min: SpaceRole): "ok" | "not_found" | "forbidden" {
+  if (!mem) return "not_found";
+  if (ROLE_RANK[mem.role] < ROLE_RANK[min]) return "forbidden";
+  return "ok";
+}
 
 export async function loadMembership(userId: string, spaceId: string): Promise<Membership | null> {
   const r = await query<Membership>(
@@ -93,4 +107,21 @@ export async function loadMembership(userId: string, spaceId: string): Promise<M
     [userId, spaceId],
   );
   return r.rows[0] ?? null;
+}
+
+export type RoleGate =
+  | { ok: true; mem: Membership }
+  | { ok: false; error: "not_found" | "forbidden" };
+
+/** Load membership and enforce a minimum role. Non-members are not_found (no leak). */
+export async function requireRole(userId: string, spaceId: string, min: SpaceRole): Promise<RoleGate> {
+  const mem = await loadMembership(userId, spaceId);
+  const status = checkRole(mem, min);
+  if (status !== "ok") return { ok: false, error: status };
+  return { ok: true, mem: mem! };
+}
+
+export function roleDenied(c: Context, gate: RoleGate) {
+  if (gate.ok) return null;
+  return gate.error === "not_found" ? errors.notFound(c) : errors.forbidden(c);
 }

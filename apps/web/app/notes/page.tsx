@@ -2,20 +2,22 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
+import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
 
 type Note = { id: string; title: string; path: string; updated_at: string };
 
 export default function NotesPage() {
   const [notes, setNotes] = useState<Note[]>([]);
+  const [space, setSpace] = useState<Space | null>(null);
   const [err, setErr] = useState("");
   useEffect(() => {
     if (!getToken()) { location.href = "/login"; return; }
     (async () => {
       try {
-        const s = await api<{ spaces: { id: string }[] }>("/v1/spaces");
-        const id = s.spaces[0]?.id;
-        if (!id) return;
-        const n = await api<{ notes: Note[] }>(`/v1/spaces/${id}/notes`);
+        const { current } = await loadSpaces();
+        if (!current) return;
+        setSpace(current);
+        const n = await api<{ notes: Note[] }>(`/v1/spaces/${current.id}/notes`);
         setNotes(n.notes);
       } catch (e) {
         setErr(e instanceof Error ? e.message : "加载失败");
@@ -25,6 +27,8 @@ export default function NotesPage() {
   return (
     <>
       <h1>笔记列表</h1>
+      <p className="readonly-banner">中枢只读，不写回任何源。</p>
+      {space && <p className="muted">当前空间：{space.name}（{spaceKindLabel(space.kind)}）</p>}
       {err && <p className="err">{err}</p>}
       <div className="card">
         <ul className="list">

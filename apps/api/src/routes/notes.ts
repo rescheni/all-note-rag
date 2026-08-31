@@ -3,7 +3,7 @@ import { toFtsTokens, toTsQueryTokens } from "@note-hub/core";
 import { renderPreviewHtml } from "@note-hub/preview";
 import { query } from "../db.ts";
 import { errors } from "../errors.ts";
-import { loadMembership, requireUser, type AuthUser } from "../auth.ts";
+import { loadMembership, requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
 import { env } from "../env.ts";
 import { getObjectBytes, getObjectText } from "../s3.ts";
 import { extractBlocks } from "@note-hub/normalize";
@@ -40,7 +40,9 @@ async function noteIfMember(userId: string, noteId: string) {
 noteRoutes.get("/spaces/:id/notes", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
-  if (!(await loadMembership(user.id, spaceId))) return errors.notFound(c);
+  const gate = await requireRole(user.id, spaceId, "viewer");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
   const path = c.req.query("path");
   const q = c.req.query("q");
   const params: unknown[] = [spaceId];
@@ -119,7 +121,9 @@ noteRoutes.get("/notes/:id/assets", async (c) => {
 noteRoutes.get("/spaces/:id/search", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
-  if (!(await loadMembership(user.id, spaceId))) return errors.notFound(c);
+  const gate = await requireRole(user.id, spaceId, "viewer");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
   const q = (c.req.query("q") ?? "").trim();
   if (!q) return c.json({ results: [] });
   const like = "%" + q + "%";

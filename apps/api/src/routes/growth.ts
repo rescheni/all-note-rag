@@ -11,7 +11,7 @@ import {
 } from "@note-hub/skills-runtime";
 import { query } from "../db.ts";
 import { errors, jsonError } from "../errors.ts";
-import { loadMembership, requireUser, type AuthUser } from "../auth.ts";
+import { loadMembership, requireRole, requireUser, type AuthUser } from "../auth.ts";
 
 type Vars = { user: AuthUser };
 export const growthRoutes = new Hono<{ Variables: Vars }>();
@@ -23,8 +23,8 @@ type PersonalOwner =
   | { ok: true; space: { kind: string; owner_user_id: string }; mem: NonNullable<Awaited<ReturnType<typeof loadMembership>>> };
 
 async function loadPersonalOwner(userId: string, spaceId: string): Promise<PersonalOwner> {
-  const mem = await loadMembership(userId, spaceId);
-  if (!mem) return { ok: false, error: "not_found" };
+  const gate = await requireRole(userId, spaceId, "viewer");
+  if (!gate.ok) return { ok: false, error: "not_found" };
   const r = await query<{ kind: string; owner_user_id: string }>(
     "SELECT kind, owner_user_id FROM spaces WHERE id = $1",
     [spaceId],
@@ -33,8 +33,8 @@ async function loadPersonalOwner(userId: string, spaceId: string): Promise<Perso
   if (!space) return { ok: false, error: "not_found" };
   const growthErr = growthAccessError(space.kind);
   if (growthErr) return { ok: false, error: "growth", growthErr };
-  if (mem.role !== "owner") return { ok: false, error: "forbidden" };
-  return { ok: true, space, mem };
+  if (gate.mem.role !== "owner") return { ok: false, error: "forbidden" };
+  return { ok: true, space, mem: gate.mem };
 }
 
 growthRoutes.get("/spaces/:id/growth/report", async (c) => {

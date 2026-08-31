@@ -4,7 +4,7 @@ import { Nav } from "./nav";
 
 export const metadata = {
   title: "笔记中枢",
-  description: "个人笔记只读聚合层",
+  description: "个人笔记与团队文档只读聚合层",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

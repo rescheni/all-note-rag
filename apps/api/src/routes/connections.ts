@@ -10,17 +10,13 @@ import { createAdapter } from "@note-hub/adapters";
 import { query } from "../db.ts";
 import { env } from "../env.ts";
 import { errors, jsonError } from "../errors.ts";
-import { loadMembership, requireUser, type AuthUser } from "../auth.ts";
+import { requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
 import { enqueueSync } from "../queue.ts";
 import { decryptConnectionSecrets, publicConnection } from "../connection-util.ts";
 
 type Vars = { user: AuthUser };
 export const connectionRoutes = new Hono<{ Variables: Vars }>();
 connectionRoutes.use("*", requireUser);
-
-function canManage(role: string): boolean {
-  return role === "owner" || role === "editor";
-}
 
 function hasSecretPayload(s: ConnectionSecrets): boolean {
   return Boolean(s.access_key || s.secret_key || s.token || s.app_id || s.app_secret);
@@ -29,7 +25,9 @@ function hasSecretPayload(s: ConnectionSecrets): boolean {
 connectionRoutes.get("/spaces/:id/connections", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
-  if (!(await loadMembership(user.id, spaceId))) return errors.notFound(c);
+  const gate = await requireRole(user.id, spaceId, "viewer");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
   const r = await query("SELECT * FROM connections WHERE space_id = $1 ORDER BY created_at", [spaceId]);
   return c.json({ connections: r.rows.map(publicConnection) });
 });
@@ -37,9 +35,9 @@ connectionRoutes.get("/spaces/:id/connections", async (c) => {
 connectionRoutes.post("/spaces/:id/connections", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
-  const mem = await loadMembership(user.id, spaceId);
-  if (!mem) return errors.notFound(c);
-  if (!canManage(mem.role)) return errors.forbidden(c);
+  const gate = await requireRole(user.id, spaceId, "editor");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
   const body = await c.req.json().catch(() => ({}));
   const parsed = validateConnectionInput(body);
   if (!parsed.ok) {
@@ -81,9 +79,9 @@ connectionRoutes.patch("/connections/:id", async (c) => {
   const row = await query("SELECT * FROM connections WHERE id = $1", [id]);
   const conn = row.rows[0];
   if (!conn) return errors.notFound(c);
-  const mem = await loadMembership(user.id, conn.space_id);
-  if (!mem) return errors.notFound(c);
-  if (!canManage(mem.role)) return errors.forbidden(c);
+  const gate = await requireRole(user.id, conn.space_id, "editor");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
   const body = await c.req.json().catch(() => ({})) as {
     name?: string;
     config?: Partial<ConnectionConfig>;
@@ -112,9 +110,9 @@ connectionRoutes.post("/connections/:id/probe", async (c) => {
   const row = await query("SELECT * FROM connections WHERE id = $1", [id]);
   const conn = row.rows[0];
   if (!conn) return errors.notFound(c);
-  const mem = await loadMembership(user.id, conn.space_id);
-  if (!mem) return errors.notFound(c);
-  if (!canManage(mem.role)) return errors.forbidden(c);
+  const gate = await requireRole(user.id, conn.space_id, "editor");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
   const secrets = await decryptConnectionSecrets(conn);
   const adapter = createAdapter(conn.source);
   const result = await adapter.probe({
@@ -141,9 +139,9 @@ connectionRoutes.post("/connections/:id/sync", async (c) => {
   const row = await query("SELECT * FROM connections WHERE id = $1", [id]);
   const conn = row.rows[0];
   if (!conn) return errors.notFound(c);
-  const mem = await loadMembership(user.id, conn.space_id);
-  if (!mem) return errors.notFound(c);
-  if (!canManage(mem.role)) return errors.forbidden(c);
+  const gate = await requireRole(user.id, conn.space_id, "editor");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
   if (conn.status === "encrypted_unreadable" || conn.config?.e2ee) return errors.encrypted(c);
   const q = await enqueueSync(id);
   if (!q.queued && q.reason === "sync_in_progress") return errors.syncInProgress(c);
@@ -156,7 +154,9 @@ connectionRoutes.get("/connections/:id/sync", async (c) => {
   const row = await query("SELECT * FROM connections WHERE id = $1", [id]);
   const conn = row.rows[0];
   if (!conn) return errors.notFound(c);
-  if (!(await loadMembership(user.id, conn.space_id))) return errors.notFound(c);
+  const gate = await requireRole(user.id, conn.space_id, "viewer");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
   const runs = await query(
     `SELECT * FROM sync_run WHERE connection_id = $1 ORDER BY started_at DESC LIMIT 5`,
     [id],

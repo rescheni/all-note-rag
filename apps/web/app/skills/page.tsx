@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { api, getToken } from "@/lib/api";
+import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
 
 type CatalogSkill = {
   id: string;
@@ -19,7 +20,7 @@ type Installed = {
 };
 
 export default function SkillsPage() {
-  const [spaceId, setSpaceId] = useState("");
+  const [space, setSpace] = useState<Space | null>(null);
   const [catalog, setCatalog] = useState<CatalogSkill[]>([]);
   const [installed, setInstalled] = useState<Installed[]>([]);
   const [err, setErr] = useState("");
@@ -38,14 +39,17 @@ export default function SkillsPage() {
     }
     (async () => {
       try {
-        const s = await api<{ spaces: { id: string }[] }>("/v1/spaces");
-        setSpaceId(s.spaces[0]?.id ?? "");
+        const { current } = await loadSpaces();
+        setSpace(current);
         await refresh();
       } catch (e) {
         setErr(e instanceof Error ? e.message : "加载失败");
       }
     })();
   }, []);
+
+  const spaceId = space?.id ?? "";
+  const isOwner = space?.role === "owner";
 
   function rowFor(id: string): Installed | undefined {
     return installed.find((i) => i.skill_id === id && (!spaceId || i.space_id === spaceId));
@@ -89,6 +93,8 @@ export default function SkillsPage() {
       <p className="readonly-banner">
         Skills 在中枢内运行，无源凭证、无外网。不会写回 Notion / 飞书 / 思源 / Obsidian。
       </p>
+      {space && <p className="muted">当前空间：{space.name}（{spaceKindLabel(space.kind)}）</p>}
+      {!isOwner && space && <p className="muted">仅空间所有者可安装或启停 Skill。</p>}
       {err && <p className="err">{err}</p>}
       {catalog.map((s) => {
         const inst = rowFor(s.id);
@@ -101,11 +107,12 @@ export default function SkillsPage() {
                 <p className="muted">版本 {s.version} · hooks: {s.hooks.join(", ")}</p>
               </div>
               <div>
-                {!inst ? (
+                {isOwner && !inst && (
                   <button type="button" disabled={!spaceId || busy === s.id} onClick={() => install(s.id)}>
                     安装到当前空间
                   </button>
-                ) : (
+                )}
+                {isOwner && inst && (
                   <button
                     type="button"
                     className="secondary"

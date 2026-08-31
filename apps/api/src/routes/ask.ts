@@ -12,7 +12,7 @@ import {
 } from "@note-hub/skills-runtime";
 import { query } from "../db.ts";
 import { errors } from "../errors.ts";
-import { loadMembership, requireUser, type AuthUser } from "../auth.ts";
+import { requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
 
 type Vars = { user: AuthUser };
 export const askRoutes = new Hono<{ Variables: Vars }>();
@@ -50,7 +50,9 @@ async function growthOnAsk(spaceId: string, userId: string, q: string): Promise<
 askRoutes.post("/spaces/:id/ask", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
-  if (!(await loadMembership(user.id, spaceId))) return errors.notFound(c);
+  const gate = await requireRole(user.id, spaceId, "viewer");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
 
   let body: { query?: unknown; note_ids?: unknown } = {};
   try {

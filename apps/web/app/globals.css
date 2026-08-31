@@ -144,3 +144,25 @@ pre.report {
   align-items: center;
   gap: 1rem;
 }
+
+select {
+  font: inherit;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+.space-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  align-items: flex-end;
+}
+.space-bar select { min-width: 220px; }
+.member-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.35rem;
+}
+.member-add { margin-top: 0.85rem; }

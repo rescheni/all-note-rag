@@ -2,10 +2,22 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getToken, setToken } from "@/lib/api";
+import { getStoredSpaceId, SPACE_CHANGE_EVENT } from "@/lib/space";
 
 export function Nav() {
   const [authed, setAuthed] = useState(false);
-  useEffect(() => setAuthed(Boolean(getToken())), []);
+  const [spaceId, setSpaceId] = useState<string | null>(null);
+  useEffect(() => {
+    setAuthed(Boolean(getToken()));
+    const sync = () => setSpaceId(getStoredSpaceId());
+    sync();
+    window.addEventListener(SPACE_CHANGE_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(SPACE_CHANGE_EVENT, sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
   return (
     <header className="top">
       <div className="wrap">
@@ -19,6 +31,7 @@ export function Nav() {
             <Link href="/growth">成长</Link>
             <Link href="/skills">Skills</Link>
             <Link href="/connections/new">接入</Link>
+            {spaceId && <Link href={`/spaces/${spaceId}/members`}>成员</Link>}
             <a
               href="#"
               onClick={(e) => {
