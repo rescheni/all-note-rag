@@ -23,6 +23,7 @@
 | HUB_SECRET | 用于加密 Connection secrets、签发会话 |
 | VAULT_BUCKET | 夹具 vault 所在桶（默认 obsidian-src） |
 | API_PORT / WEB_ORIGIN / NEXT_PUBLIC_API_URL | API 与前端 |
+| OPENAI_BASE_URL / OPENAI_API_KEY / CHAT_MODEL | 可选。不设则问答走抽取式作答 |
 
 密钥**永远不会**出现在 API 响应里。
 
@@ -86,7 +87,7 @@ P0 使用 `simple` 配置 + **双 gram** 写入 `chunks.fts`（应用层把 CJK 
 
 - 永不写回源 vault
 - GET preview 只读 `preview/` 与 `canonical/` + DB，不打源 S3
-- 无 Ask / Skills / Growth API
+- 无 Skills / Growth API。问答为抽取式（可选 Chat Completions）
 - e2ee=true → 连接状态 `encrypted_unreadable`，跳过正文
 - 忽略 `.obsidian/` 与 `.trash/`
 
@@ -100,6 +101,7 @@ packages/core
 packages/adapters   Obsidian S3
 packages/normalize
 packages/preview
+packages/retrieve   FTS 召回 + 抽取式问答
 ```
 
 ## 实现备注

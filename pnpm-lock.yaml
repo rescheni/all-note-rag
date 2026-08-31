@@ -28,6 +28,9 @@ importers:
       '@note-hub/preview':
         specifier: workspace:*
         version: link:../../packages/preview
+      '@note-hub/retrieve':
+        specifier: workspace:*
+        version: link:../../packages/retrieve
       bullmq:
         specifier: ^5.52.2
         version: 5.81.4
@@ -172,6 +175,19 @@ importers:
       '@types/markdown-it':
         specifier: ^14.1.2
         version: 14.2.0
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/retrieve:
+    dependencies:
+      '@note-hub/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
       typescript:
         specifier: ^5.8.2
         version: 5.9.3

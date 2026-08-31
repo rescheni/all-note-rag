@@ -7,6 +7,7 @@ import { authRoutes } from "./routes/auth.ts";
 import { spaceRoutes } from "./routes/spaces.ts";
 import { connectionRoutes } from "./routes/connections.ts";
 import { noteRoutes } from "./routes/notes.ts";
+import { askRoutes } from "./routes/ask.ts";
 import { jsonError } from "./errors.ts";
 import { enqueueSync } from "./queue.ts";
 import { query } from "./db.ts";
@@ -34,6 +35,7 @@ v1.route("/", authRoutes);
 v1.route("/", spaceRoutes);
 v1.route("/", connectionRoutes);
 v1.route("/", noteRoutes);
+v1.route("/", askRoutes);
 app.route("/v1", v1);
 
 app.notFound((c) => jsonError(c, 404, "not_found", "未找到"));
