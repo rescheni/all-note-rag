@@ -1,0 +1,19 @@
+{
+  "name": "note-hub",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "pnpm -r --if-present test",
+    "migrate": "pnpm --filter @note-hub/api migrate",
+    "seed": "pnpm --filter @note-hub/api seed",
+    "dev:api": "pnpm --filter @note-hub/api dev",
+    "dev:worker": "pnpm --filter @note-hub/worker dev",
+    "dev:web": "pnpm --filter @note-hub/web dev",
+    "build": "pnpm -r --if-present build"
+  },
+  "packageManager": "pnpm@9.15.9"
+}
