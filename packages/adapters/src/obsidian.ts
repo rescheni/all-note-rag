@@ -37,9 +37,10 @@ export function createS3Client(ctx: AdapterContext): S3Client {
     region: cfg.region || "us-east-1",
     endpoint: cfg.endpoint,
     forcePathStyle: cfg.force_path_style !== false,
-    credentials: secrets
-      ? { accessKeyId: secrets.access_key, secretAccessKey: secrets.secret_key }
-      : undefined,
+    credentials:
+      secrets?.access_key && secrets?.secret_key
+        ? { accessKeyId: secrets.access_key, secretAccessKey: secrets.secret_key }
+        : undefined,
   });
 }
 
@@ -95,10 +96,10 @@ export class ObsidianAdapter implements Adapter {
     }
     const cfg = ctx.connection.config;
     try {
-      await this.s3(ctx).send(new HeadBucketCommand({ Bucket: cfg.bucket }));
+      await this.s3(ctx).send(new HeadBucketCommand({ Bucket: cfg.bucket ?? "" }));
       await this.s3(ctx).send(
         new ListObjectsV2Command({
-          Bucket: cfg.bucket,
+          Bucket: cfg.bucket ?? "",
           Prefix: cfg.remote_prefix ? posixVaultPath(cfg.remote_prefix) + "/" : undefined,
           MaxKeys: 1,
         }),
@@ -114,7 +115,7 @@ export class ObsidianAdapter implements Adapter {
     const cfg = ctx.connection.config;
     const prefix = posixVaultPath(cfg.remote_prefix ?? "");
     const ignore = ignoreList(ctx);
-    const objects = await listAll(this.s3(ctx), cfg.bucket, prefix);
+    const objects = await listAll(this.s3(ctx), cfg.bucket ?? "", prefix);
     const current: Record<string, { etag: string; key: string }> = {};
     for (const obj of objects) {
       if (!obj.Key) continue;
@@ -249,7 +250,7 @@ export class ObsidianAdapter implements Adapter {
 
   private async getKey(ctx: AdapterContext, key: string): Promise<Uint8Array> {
     const resp = await this.s3(ctx).send(
-      new GetObjectCommand({ Bucket: ctx.connection.config.bucket, Key: key }),
+      new GetObjectCommand({ Bucket: ctx.connection.config.bucket ?? "", Key: key }),
     );
     return streamToBytes(resp.Body);
   }

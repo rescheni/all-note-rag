@@ -1,5 +1,5 @@
 import "./load-env.ts";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -48,6 +48,29 @@ async function main() {
     const fp = join(fixture, rel);
     if (!existsSync(fp)) throw new Error("missing fixture " + rel);
     await put(env.vaultBucket, `vault1/${rel}`, readFileSync(fp), ct);
+  }
+  const siyuanRoot = join(root, "fixtures/siyuan-data");
+  const siyuanBucket = "siyuan-src";
+  await ensure(siyuanBucket);
+  function walk(dir: string, prefix = ""): Array<{ key: string; abs: string }> {
+    const out: Array<{ key: string; abs: string }> = [];
+    if (!existsSync(dir)) return out;
+    for (const name of readdirSync(dir)) {
+      const abs = join(dir, name);
+      const key = prefix ? `${prefix}/${name}` : name;
+      if (statSync(abs).isDirectory()) out.push(...walk(abs, key));
+      else out.push({ key: key.replace(/\\/g, "/"), abs });
+    }
+    return out;
+  }
+  const guess = (rel: string) => {
+    if (rel.endsWith(".sy") || rel.endsWith(".json")) return "application/json";
+    if (rel.endsWith(".md")) return "text/markdown; charset=utf-8";
+    if (rel.endsWith(".txt")) return "text/plain; charset=utf-8";
+    return "application/octet-stream";
+  };
+  for (const f of walk(siyuanRoot)) {
+    await put(siyuanBucket, f.key, readFileSync(f.abs), guess(f.key));
   }
   console.log("seed complete");
 }

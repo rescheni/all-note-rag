@@ -7,6 +7,13 @@ type Space = { id: string; name: string; kind: string; role: string };
 type Conn = { id: string; name: string; source: string; status: string; last_sync_at: string | null; last_error: string | null };
 type Note = { id: string; title: string; path: string; updated_at: string };
 
+const SOURCES = [
+  { id: "obsidian", label: "Obsidian", hint: "明文 S3 前缀" },
+  { id: "siyuan", label: "思源", hint: "内核 API 或明文 data/" },
+  { id: "notion", label: "Notion", hint: "探活 token，列表稍后" },
+  { id: "feishu", label: "飞书", hint: "探活应用凭证，列表稍后" },
+] as const;
+
 export default function HomePage() {
   const [err, setErr] = useState("");
   const [space, setSpace] = useState<Space | null>(null);
@@ -47,12 +54,21 @@ export default function HomePage() {
   return (
     <>
       <h1>{space ? space.name : "个人空间"}</h1>
-      <p className="muted">只读聚合 · 不写回源库</p>
+      <p className="readonly-banner">中枢只读，不写回任何源。</p>
       {err && <p className="err">{err}</p>}
+      <h2>接入一个源</h2>
+      <div className="source-grid">
+        {SOURCES.map((s) => (
+          <Link key={s.id} className="source-card" href={`/connections/new?source=${s.id}`}>
+            <h3>{s.label}</h3>
+            <p className="muted">{s.hint}</p>
+          </Link>
+        ))}
+      </div>
       <div className="row">
         <div className="card grow">
           <h2>连接</h2>
-          {conns.length === 0 && <p className="muted">还没有连接。<Link href="/connections/new">新建 Obsidian 连接</Link></p>}
+          {conns.length === 0 && <p className="muted">还没有连接，从上方选择一个源。</p>}
           <ul className="list">
             {conns.map((c) => (
               <li key={c.id}>

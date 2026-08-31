@@ -1,0 +1,27 @@
+{
+  "ID": "20200813054500-nchild0",
+  "Spec": "2",
+  "Type": "NodeDocument",
+  "Properties": {
+    "id": "20200813054500-nchild0",
+    "title": "子文档",
+    "type": "doc",
+    "updated": "20200813054500"
+  },
+  "Children": [
+    {
+      "Type": "NodeParagraph",
+      "ID": "20200813054501-cpara01",
+      "Properties": {
+        "id": "20200813054501-cpara01",
+        "updated": "20200813054501"
+      },
+      "Children": [
+        {
+          "Type": "NodeText",
+          "Data": "子文档正文。"
+        }
+      ]
+    }
+  ]
+}

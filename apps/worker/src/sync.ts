@@ -1,23 +1,31 @@
 import {
   decryptSecret,
+  isHubError,
   isMarkdownPath,
   toFtsTokens,
+  type Adapter,
+  type AdapterContext,
   type ConnectionRecord,
   type ConnectionSecrets,
   type NormalizedNote,
 } from "@note-hub/core";
-import { ObsidianAdapter } from "@note-hub/adapters";
-import { normalizeObsidianNote, referencedAssetPaths } from "@note-hub/normalize";
+import { createAdapter } from "@note-hub/adapters";
+import { normalizeObsidianNote, normalizeSiyuanNote, referencedAssetPaths } from "@note-hub/normalize";
 import { renderPreviewHtml } from "@note-hub/preview";
 import { sha256Hex } from "@note-hub/core";
 import { query } from "./db.ts";
 import { env } from "./env.ts";
 import { putHub } from "./s3.ts";
 
-async function loadSecrets(ref: string | null): Promise<ConnectionSecrets> {
-  if (!ref) return { access_key: env.s3AccessKey, secret_key: env.s3SecretKey };
-  const r = await query<{ ciphertext: string }>("SELECT ciphertext FROM secrets WHERE id = $1", [ref]);
-  if (!r.rows[0]) return { access_key: env.s3AccessKey, secret_key: env.s3SecretKey };
+async function loadSecrets(conn: ConnectionRecord): Promise<ConnectionSecrets | null> {
+  const mode = conn.mode || conn.config?.mode;
+  const useMinio = conn.source === "obsidian" || (conn.source === "siyuan" && mode === "workspace");
+  const fallback: ConnectionSecrets | null = useMinio
+    ? { access_key: env.s3AccessKey, secret_key: env.s3SecretKey }
+    : null;
+  if (!conn.secrets_ref) return fallback;
+  const r = await query<{ ciphertext: string }>("SELECT ciphertext FROM secrets WHERE id = $1", [conn.secrets_ref]);
+  if (!r.rows[0]) return fallback;
   return JSON.parse(decryptSecret(r.rows[0].ciphertext, env.hubSecret)) as ConnectionSecrets;
 }
 
@@ -95,8 +103,8 @@ async function resolveLinks(connectionId: string, fromNoteId: string, note: Norm
 
 async function processNote(
   conn: ConnectionRecord,
-  adapter: ObsidianAdapter,
-  ctx: { connection: ConnectionRecord; secrets: ConnectionSecrets; cursor: Record<string, unknown> | null },
+  adapter: Adapter,
+  ctx: AdapterContext,
   sourceId: string,
   path: string,
 ): Promise<"upsert" | "skip" | "delete"> {
@@ -118,7 +126,10 @@ async function processNote(
       hash: sha256Hex(a.bytes),
     });
   }
-  const note = normalizeObsidianNote(payload, conn.id, extraAssets);
+  const note =
+    conn.source === "siyuan"
+      ? normalizeSiyuanNote(payload, conn.id, extraAssets)
+      : normalizeObsidianNote(payload, conn.id, extraAssets);
 
   const sourceKey = `source/${conn.space_id}/${conn.id}/${payload.path}`;
   const rawBytes = typeof payload.raw === "string" ? new TextEncoder().encode(payload.raw) : payload.raw;
@@ -240,9 +251,19 @@ export async function runSync(connectionId: string): Promise<void> {
       return;
     }
 
-    const secrets = await loadSecrets(conn.secrets_ref);
-    const adapter = new ObsidianAdapter();
+    const secrets = await loadSecrets(conn);
+    const adapter = createAdapter(conn.source);
     const ctx = { connection: conn, secrets, cursor: conn.cursor };
+    if (conn.source === "notion" || conn.source === "feishu") {
+      console.log(
+        JSON.stringify({
+          level: "info",
+          connection_id: connectionId,
+          source: conn.source,
+          message: "adapter lists not implemented",
+        }),
+      );
+    }
     const probe = await adapter.probe(ctx);
     if (!probe.ok) {
       const status = probe.status ?? "error";
@@ -275,9 +296,9 @@ export async function runSync(connectionId: string): Promise<void> {
     }
 
     for (const ch of upsertsList) {
-      if (!ch.path || !isMarkdownPath(ch.path)) continue;
+      if (conn.source === "obsidian" && (!ch.path || !isMarkdownPath(ch.path))) continue;
       try {
-        const result = await processNote(conn, adapter, ctx, ch.source_id, ch.path);
+        const result = await processNote(conn, adapter, ctx, ch.source_id, ch.path ?? ch.source_id);
         if (result === "upsert") upserts++;
         else if (result === "skip") skipped++;
         else deletes++;
@@ -308,14 +329,16 @@ export async function runSync(connectionId: string): Promise<void> {
     );
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
+    const last = isHubError(e) ? `${e.code}: ${e.message}` : message;
     await query(
       `UPDATE sync_run SET finished_at = now(), upserts = $2, deletes = $3, skipped = $4, failed = $5 WHERE id = $1`,
       [runId, upserts, deletes, skipped, failed],
     );
     await query(
-      "UPDATE connections SET last_error = $2, updated_at = now() WHERE id = $1",
-      [connectionId, message],
+      "UPDATE connections SET last_error = $2, status = 'error', updated_at = now() WHERE id = $1",
+      [connectionId, last],
     );
+    if (isHubError(e)) return;
     throw e;
   }
 }

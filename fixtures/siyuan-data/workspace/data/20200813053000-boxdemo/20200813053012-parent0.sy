@@ -1,0 +1,55 @@
+{
+  "ID": "20200813053012-parent0",
+  "Spec": "2",
+  "Type": "NodeDocument",
+  "Properties": {
+    "id": "20200813053012-parent0",
+    "title": "欢迎",
+    "type": "doc",
+    "updated": "20200813053012"
+  },
+  "Children": [
+    {
+      "Type": "NodeHeading",
+      "ID": "20200813053013-head001",
+      "HeadingLevel": 1,
+      "Properties": {
+        "id": "20200813053013-head001",
+        "updated": "20200813053013"
+      },
+      "Children": [
+        {
+          "Type": "NodeText",
+          "Data": "欢迎思源"
+        }
+      ]
+    },
+    {
+      "Type": "NodeParagraph",
+      "ID": "20200813053014-para001",
+      "Properties": {
+        "id": "20200813053014-para001",
+        "updated": "20200813053014"
+      },
+      "Children": [
+        {
+          "Type": "NodeText",
+          "Data": "这是明文工作区夹具。引用子文档 "
+        },
+        {
+          "Type": "NodeBlockRef",
+          "Children": [
+            {
+              "Type": "NodeBlockRefID",
+              "Data": "20200813054500-nchild0"
+            }
+          ]
+        },
+        {
+          "Type": "NodeText",
+          "Data": "。"
+        }
+      ]
+    }
+  ]
+}

@@ -5,3 +5,5 @@ export * from "./ignore.ts";
 export * from "./cjk.ts";
 export * from "./secrets.ts";
 export * from "./wiki.ts";
+export * from "./errors.ts";
+export * from "./connection-validate.ts";

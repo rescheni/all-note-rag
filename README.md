@@ -49,10 +49,24 @@ pnpm --filter @note-hub/web dev
 
 也可用 `scripts/boot-local.sh`（会尝试拉起本机 Postgres/Redis/MinIO 并 migrate+seed）。
 
+
+## 接入
+
+中枢只读，**不写回**任何源。首页四个源卡片与导航「接入」都指向 `/connections/new?source=...`，不再只有「新建 Obsidian 连接」。
+
+| 源 | 方式 | v1 |
+|----|------|----|
+| **Obsidian** | 明文 S3 / Remotely Save 前缀 | 完整摄入 Markdown + 引用附件 |
+| **思源** | 模式 A：内核 HTTP（`lsNotebooks` / SQL / `exportMdContent`）；模式 B：明文 `data/` 前缀 | **官方 S3 `repo/` dejavu 快照不受支持**，返回 `siyuan_official_s3_unsupported`（「v1 不解包官方加密快照，请用内核 API 或明文 data/ 前缀。」） |
+| **Notion** | 保存 Integration token，探活 `GET https://api.notion.com/v1/users/me` | `listChanges` 为空；同步成功但不拉页面 |
+| **飞书** | 探活 `tenant_access_token/internal` | 同上，列表未实现 |
+
+密钥永远不会出现在 API 响应里。夹具：`fixtures/obsidian-vault` → 桶 `obsidian-src`；`fixtures/siyuan-data` → 桶 `siyuan-src`。
+
 ## 验收路径
 
 1. 打开 http://127.0.0.1:3000 注册账号（自动创建个人空间）。
-2. 「接入 Obsidian」：Endpoint `http://127.0.0.1:9000`，Bucket `obsidian-src`，prefix `vault1`，密钥 minioadmin。
+2. 「接入」→ Obsidian：Endpoint `http://127.0.0.1:9000`，Bucket `obsidian-src`，prefix `vault1`，密钥 minioadmin。也可接入思源明文 `siyuan-src` / `workspace` 前缀。
 3. 保存并同步。
 4. 打开笔记列表，预览 `Welcome.md`，应看到「欢迎来到笔记中枢夹具库」。
 5. 搜索 `紫铜灯笼检索词` 或 `PINEAPPLE_LANTERN_ZHONGSHU`，应命中 `Daily/2026-08-29.md`。

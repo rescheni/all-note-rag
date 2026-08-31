@@ -1,6 +1,7 @@
 export type SpaceKind = "personal" | "team";
 export type MemberRole = "owner" | "editor" | "viewer";
-export type SourceKind = "obsidian" | "siyuan" | "notion" | "feishu";
+export const SOURCE_KINDS = ["obsidian", "siyuan", "notion", "feishu"] as const;
+export type SourceKind = (typeof SOURCE_KINDS)[number];
 export type ConnectionStatus = "active" | "paused" | "error" | "encrypted_unreadable";
 export type ChangeType = "upsert" | "delete";
 export type BlockType =
@@ -23,13 +24,21 @@ export type Change = {
 };
 
 export type ConnectionConfig = {
-  bucket: string;
+  bucket?: string;
   region?: string;
   remote_prefix?: string;
   endpoint?: string;
   ignore?: string[];
   e2ee?: boolean;
   force_path_style?: boolean;
+  kernel_base_url?: string;
+  notebook_ids?: string[];
+  workspace_prefix?: string;
+  official_s3?: boolean;
+  workspace_id?: string;
+  wiki_space_id?: string;
+  obj_types?: string[];
+  mode?: string;
 };
 
 export type ConnectionRecord = {
@@ -47,8 +56,11 @@ export type ConnectionRecord = {
 };
 
 export type ConnectionSecrets = {
-  access_key: string;
-  secret_key: string;
+  access_key?: string;
+  secret_key?: string;
+  token?: string;
+  app_id?: string;
+  app_secret?: string;
 };
 
 export type AdapterContext = {
@@ -61,6 +73,7 @@ export type ProbeResult = {
   ok: boolean;
   status?: ConnectionStatus;
   message?: string;
+  code?: string;
 };
 
 export type AssetRef = {

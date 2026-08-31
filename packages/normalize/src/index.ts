@@ -281,10 +281,4 @@ export function normalizeObsidianNote(
   };
 }
 
-/** Interface reserved for P2. */
-export function syToMarkdown(
-  _sy: unknown,
-  _opts?: { keepBlockRefs?: boolean },
-): { markdown: string; blocks: NormalizedBlock[]; links: NormalizedLink[] } {
-  throw new Error("syToMarkdown is not implemented in P0");
-}
+export { syToMarkdown, normalizeSiyuanNote } from "./sy.ts";

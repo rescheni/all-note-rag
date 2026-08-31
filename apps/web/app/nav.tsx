@@ -15,7 +15,7 @@ export function Nav() {
             <Link href="/">空间</Link>
             <Link href="/notes">笔记</Link>
             <Link href="/search">搜索</Link>
-            <Link href="/connections/new">接入 Obsidian</Link>
+            <Link href="/connections/new">接入</Link>
             <a
               href="#"
               onClick={(e) => {

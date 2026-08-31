@@ -1,6 +1,12 @@
 import { Hono } from "hono";
-import { encryptSecret, type ConnectionConfig } from "@note-hub/core";
-import { ObsidianAdapter } from "@note-hub/adapters";
+import {
+  encryptSecret,
+  SIYUAN_OFFICIAL_S3_CODE,
+  validateConnectionInput,
+  type ConnectionConfig,
+  type ConnectionSecrets,
+} from "@note-hub/core";
+import { createAdapter } from "@note-hub/adapters";
 import { query } from "../db.ts";
 import { env } from "../env.ts";
 import { errors, jsonError } from "../errors.ts";
@@ -14,6 +20,10 @@ connectionRoutes.use("*", requireUser);
 
 function canManage(role: string): boolean {
   return role === "owner" || role === "editor";
+}
+
+function hasSecretPayload(s: ConnectionSecrets): boolean {
+  return Boolean(s.access_key || s.secret_key || s.token || s.app_id || s.app_secret);
 }
 
 connectionRoutes.get("/spaces/:id/connections", async (c) => {
@@ -30,40 +40,39 @@ connectionRoutes.post("/spaces/:id/connections", async (c) => {
   const mem = await loadMembership(user.id, spaceId);
   if (!mem) return errors.notFound(c);
   if (!canManage(mem.role)) return errors.forbidden(c);
-  const body = await c.req.json().catch(() => ({})) as {
-    source?: string;
-    name?: string;
-    config?: ConnectionConfig;
-    secrets?: { access_key?: string; secret_key?: string };
-  };
-  if (body.source && body.source !== "obsidian") {
-    return jsonError(c, 400, "invalid_request", "P0 仅支持 obsidian 连接");
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = validateConnectionInput(body);
+  if (!parsed.ok) {
+    return jsonError(c, 400, parsed.code, parsed.message);
   }
-  const config: ConnectionConfig = {
-    bucket: body.config?.bucket ?? "",
-    region: body.config?.region ?? "us-east-1",
-    remote_prefix: body.config?.remote_prefix ?? "vault1",
-    endpoint: body.config?.endpoint ?? env.s3Endpoint,
-    ignore: body.config?.ignore ?? [".obsidian/", ".trash/"],
-    e2ee: Boolean(body.config?.e2ee),
-    force_path_style: true,
-  };
-  if (!config.bucket) return jsonError(c, 400, "invalid_request", "缺少 bucket");
-  const name = (body.name ?? "Obsidian").trim();
+  const value = parsed.value;
+  if (
+    (value.source === "obsidian" || (value.source === "siyuan" && value.mode === "workspace")) &&
+    !value.config.endpoint
+  ) {
+    value.config.endpoint = env.s3Endpoint;
+  }
+  let secrets = value.secrets;
+  const useDefaultMinio =
+    value.source === "obsidian" || (value.source === "siyuan" && value.mode === "workspace");
+  if (!hasSecretPayload(secrets) && useDefaultMinio) {
+    secrets = { access_key: env.s3AccessKey, secret_key: env.s3SecretKey };
+  }
+  // never default MinIO keys for notion / feishu / siyuan-api
   let secretsRef: string | null = null;
-  if (body.secrets?.access_key && body.secrets?.secret_key) {
-    const blob = encryptSecret(JSON.stringify(body.secrets), env.hubSecret);
+  if (hasSecretPayload(secrets)) {
+    const blob = encryptSecret(JSON.stringify(secrets), env.hubSecret);
     const s = await query("INSERT INTO secrets (ciphertext) VALUES ($1) RETURNING id", [blob]);
     secretsRef = s.rows[0].id;
   }
-  const status = config.e2ee ? "encrypted_unreadable" : "active";
   const r = await query(
-    `INSERT INTO connections (space_id, source, name, config, secrets_ref, status)
-     VALUES ($1,'obsidian',$2,$3::jsonb,$4,$5)
+    `INSERT INTO connections (space_id, source, name, config, secrets_ref, status, mode)
+     VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7)
      RETURNING *`,
-    [spaceId, name, JSON.stringify(config), secretsRef, status],
+    [spaceId, value.source, value.name, JSON.stringify(value.config), secretsRef, value.status, value.mode],
   );
-  return c.json({ connection: publicConnection(r.rows[0]) }, 201);
+  const row = r.rows[0];
+  return c.json({ connection: publicConnection(row) }, 201);
 });
 
 connectionRoutes.patch("/connections/:id", async (c) => {
@@ -79,11 +88,11 @@ connectionRoutes.patch("/connections/:id", async (c) => {
     name?: string;
     config?: Partial<ConnectionConfig>;
     status?: string;
-    secrets?: { access_key?: string; secret_key?: string };
+    secrets?: ConnectionSecrets;
   };
   const config = { ...(conn.config as object), ...(body.config ?? {}) };
   let secretsRef = conn.secrets_ref;
-  if (body.secrets?.access_key && body.secrets?.secret_key) {
+  if (body.secrets && hasSecretPayload(body.secrets)) {
     const blob = encryptSecret(JSON.stringify(body.secrets), env.hubSecret);
     const s = await query("INSERT INTO secrets (ciphertext) VALUES ($1) RETURNING id", [blob]);
     secretsRef = s.rows[0].id;
@@ -107,7 +116,7 @@ connectionRoutes.post("/connections/:id/probe", async (c) => {
   if (!mem) return errors.notFound(c);
   if (!canManage(mem.role)) return errors.forbidden(c);
   const secrets = await decryptConnectionSecrets(conn);
-  const adapter = new ObsidianAdapter();
+  const adapter = createAdapter(conn.source);
   const result = await adapter.probe({
     connection: { ...conn, config: conn.config },
     secrets,
@@ -120,6 +129,9 @@ connectionRoutes.post("/connections/:id/probe", async (c) => {
     );
   }
   if (result.status === "encrypted_unreadable") return errors.encrypted(c);
+  if (result.code === SIYUAN_OFFICIAL_S3_CODE) {
+    return jsonError(c, 400, result.code, result.message ?? "官方 S3 不受支持");
+  }
   return c.json({ probe: result });
 });
 
