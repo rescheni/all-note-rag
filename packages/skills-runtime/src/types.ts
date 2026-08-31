@@ -44,11 +44,36 @@ export type WriteGrowthEvent = {
   payload?: Record<string, unknown>;
 };
 
+export type HostLink = {
+  from_note_id: string;
+  to_note_id: string | null;
+};
+
+export type HostArtifact = {
+  id?: string;
+  space_id?: string;
+  skill_id: string;
+  note_id: string | null;
+  kind: string;
+  payload: Record<string, unknown>;
+  created_at?: string;
+};
+
+export type WriteArtifact = {
+  skill_id: string;
+  note_id?: string | null;
+  kind: string;
+  payload?: Record<string, unknown>;
+};
+
 export type HostApi = {
   queryNotes: (opts?: { ids?: string[]; from?: string; to?: string; path?: string }) => Promise<HostNote[]>;
   queryGrowth: (opts?: { from?: string; to?: string; kinds?: GrowthKind[] }) => Promise<HostGrowthEvent[]>;
   writeGrowthEvent: (event: WriteGrowthEvent) => Promise<{ id: string; created: boolean }>;
   writeReport: (report: { range_from: string; range_to: string; markdown: string }) => Promise<{ id: string }>;
+  writeArtifact: (artifact: WriteArtifact) => Promise<{ id: string; created: boolean }>;
+  queryArtifacts: (opts?: { skill_id?: string; kind?: string; note_id?: string }) => Promise<HostArtifact[]>;
+  queryLinks: (opts?: { note_ids?: string[] }) => Promise<HostLink[]>;
 };
 
 export type SkillRunInput = {

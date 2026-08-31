@@ -2,12 +2,16 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { growthWeeklyHandler } from "./growth-weekly.ts";
+import { meetingExtractHandler } from "./meeting-extract.ts";
+import { writingHealthHandler } from "./writing-health.ts";
 import { parseSkillMd } from "./parse.ts";
 import { officialSkillDir, readSkillMd } from "./paths.ts";
 import type { SkillHandler, SkillManifest, SkillRunInput, SkillRunResult } from "./types.ts";
 
 const BUILTIN: Record<string, SkillHandler> = {
   "growth-weekly": growthWeeklyHandler,
+  "meeting-extract": meetingExtractHandler,
+  "writing-health": writingHealthHandler,
 };
 
 export type LoadedSkill = {

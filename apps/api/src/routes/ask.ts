@@ -47,6 +47,23 @@ async function growthOnAsk(spaceId: string, userId: string, q: string): Promise<
   }
 }
 
+async function writingHealthOnAsk(spaceId: string, userId: string, q: string): Promise<string | undefined> {
+  try {
+    if (!(await isSkillEnabled(query, spaceId, "writing-health"))) return undefined;
+    const host = createPgHostApi({ query, spaceId, userId });
+    const result = await runOfficialHook("writing-health", {
+      space_id: spaceId,
+      hook: "on-ask",
+      payload: { query: q },
+      host,
+    });
+    return result.summary;
+  } catch (e) {
+    console.error(JSON.stringify({ level: "error", message: "on-ask writing-health failed", error: String(e) }));
+    return undefined;
+  }
+}
+
 askRoutes.post("/spaces/:id/ask", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
@@ -65,9 +82,10 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
     ? body.note_ids.filter((id): id is string => typeof id === "string")
     : undefined;
 
-  const [retrieved, growthSummary] = await Promise.all([
+  const [retrieved, growthSummary, writingSummary] = await Promise.all([
     hybridRetrieve(spaceId, q, { noteIds, loadChunks }),
     growthOnAsk(spaceId, user.id, q),
+    writingHealthOnAsk(spaceId, user.id, q),
   ]);
   if (retrieved.unknown) {
     return c.json({ unknown: true, answer_markdown: UNKNOWN_ANSWER, citations: [] });
@@ -76,11 +94,16 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
   if (answer.unknown) {
     return c.json({ unknown: true, answer_markdown: UNKNOWN_ANSWER, citations: [] });
   }
-  const markdown = growthSummary
-    ? `${answer.answer_markdown}\n\n---\n${growthSummary}`
+  const extras: Record<string, string> = {};
+  if (growthSummary) extras.growth = growthSummary;
+  if (writingSummary) extras.writing_health = writingSummary;
+  const attached = [growthSummary, writingSummary].filter(Boolean).join("\n\n");
+  const markdown = attached
+    ? `${answer.answer_markdown}\n\n---\n${attached}`
     : answer.answer_markdown;
   return c.json({
     answer_markdown: markdown,
     citations: answer.citations,
+    extra: Object.keys(extras).length ? extras : undefined,
   });
 });

@@ -29,6 +29,8 @@ export function Nav() {
             <Link href="/search">搜索</Link>
             <Link href="/ask">问答</Link>
             <Link href="/growth">成长</Link>
+            <Link href="/meetings">会议</Link>
+            <Link href="/writing-health">写作</Link>
             <Link href="/skills">Skills</Link>
             <Link href="/connections/new">接入</Link>
             {spaceId && <Link href={`/spaces/${spaceId}/members`}>成员</Link>}

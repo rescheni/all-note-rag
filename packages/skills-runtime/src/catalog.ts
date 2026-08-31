@@ -95,3 +95,8 @@ export async function isSkillEnabled(
   );
   return Boolean(r.rows[0]?.enabled);
 }
+
+export function isOfficialSkillId(skillId: string): boolean {
+  if (!skillId.trim()) return false;
+  return listOfficialCatalog().some((s) => s.id === skillId);
+}

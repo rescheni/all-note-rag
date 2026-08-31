@@ -190,6 +190,27 @@ describe("team spaces", () => {
     expect(enable.status).toBe(403);
   });
 
+  it("owner can install meeting-extract", async () => {
+    const catalog = await get("/v1/skills", tokenA);
+    expect(catalog.status).toBe(200);
+    const ids = catalog.body.catalog.map((s: { id: string }) => s.id);
+    expect(ids).toContain("meeting-extract");
+    expect(ids).toContain("writing-health");
+    expect(ids).toContain("growth-weekly");
+
+    const unknown = await post(`/v1/spaces/${teamId}/skills/install`, { skill_id: "not-a-skill" }, tokenA);
+    expect(unknown.status).toBe(404);
+
+    const inst = await post(`/v1/spaces/${teamId}/skills/install`, { skill_id: "meeting-extract" }, tokenA);
+    expect(inst.status).toBe(201);
+    expect(inst.body.skill_id).toBe("meeting-extract");
+    expect(inst.body.enabled).toBe(true);
+
+    const meetings = await get(`/v1/spaces/${teamId}/meetings`, tokenB);
+    expect(meetings.status).toBe(200);
+    expect(Array.isArray(meetings.body.meetings)).toBe(true);
+  });
+
   it("growth on team still 400", async () => {
     const list = await get(`/v1/spaces/${teamId}/growth`, tokenA);
     expect(list.status).toBe(400);

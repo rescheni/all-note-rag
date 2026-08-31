@@ -8,3 +8,5 @@ export * from "./paths.ts";
 export * from "./growth-weekly.ts";
 export * from "./run.ts";
 export * from "./catalog.ts";
+export * from "./meeting-extract.ts";
+export * from "./writing-health.ts";
