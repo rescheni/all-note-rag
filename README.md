@@ -58,8 +58,8 @@ pnpm --filter @note-hub/web dev
 |----|------|----|
 | **Obsidian** | 明文 S3 / Remotely Save 前缀 | 完整摄入 Markdown + 引用附件 |
 | **思源** | 模式 A：内核 HTTP（`lsNotebooks` / SQL / `exportMdContent`）；模式 B：明文 `data/` 前缀 | **官方 S3 `repo/` dejavu 快照不受支持**，返回 `siyuan_official_s3_unsupported`（「v1 不解包官方加密快照，请用内核 API 或明文 data/ 前缀。」） |
-| **Notion** | 保存 Integration token，探活 `GET https://api.notion.com/v1/users/me` | `listChanges` 为空；同步成功但不拉页面 |
-| **飞书** | 探活 `tenant_access_token/internal` | 同上，列表未实现 |
+| **Notion** | Integration token，探活 `GET /v1/users/me`，search 页面与数据库行，blocks → markdown | 会摄入笔记；需要真实 token。单元测试使用 mock fetch，不打外网 |
+| **飞书** | `tenant_access_token` + 知识库 `wiki_space_id` 下 docx | 会摄入笔记；需要真实应用凭证。未填 wiki_space_id 时列表为空。测试使用 mock |
 
 密钥永远不会出现在 API 响应里。夹具：`fixtures/obsidian-vault` → 桶 `obsidian-src`；`fixtures/siyuan-data` → 桶 `siyuan-src`。
 

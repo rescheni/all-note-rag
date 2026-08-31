@@ -10,7 +10,7 @@ import {
   type NormalizedNote,
 } from "@note-hub/core";
 import { createAdapter } from "@note-hub/adapters";
-import { normalizeObsidianNote, normalizeSiyuanNote, referencedAssetPaths } from "@note-hub/normalize";
+import { normalizeObsidianNote, normalizeSiyuanNote, normalizeNotionNote, normalizeFeishuNote, referencedAssetPaths } from "@note-hub/normalize";
 import { renderPreviewHtml } from "@note-hub/preview";
 import { sha256Hex } from "@note-hub/core";
 import { query } from "./db.ts";
@@ -129,7 +129,11 @@ async function processNote(
   const note =
     conn.source === "siyuan"
       ? normalizeSiyuanNote(payload, conn.id, extraAssets)
-      : normalizeObsidianNote(payload, conn.id, extraAssets);
+      : conn.source === "notion"
+        ? normalizeNotionNote(payload, conn.id, extraAssets)
+        : conn.source === "feishu"
+          ? normalizeFeishuNote(payload, conn.id, extraAssets)
+          : normalizeObsidianNote(payload, conn.id, extraAssets);
 
   const sourceKey = `source/${conn.space_id}/${conn.id}/${payload.path}`;
   const rawBytes = typeof payload.raw === "string" ? new TextEncoder().encode(payload.raw) : payload.raw;
@@ -254,16 +258,6 @@ export async function runSync(connectionId: string): Promise<void> {
     const secrets = await loadSecrets(conn);
     const adapter = createAdapter(conn.source);
     const ctx = { connection: conn, secrets, cursor: conn.cursor };
-    if (conn.source === "notion" || conn.source === "feishu") {
-      console.log(
-        JSON.stringify({
-          level: "info",
-          connection_id: connectionId,
-          source: conn.source,
-          message: "adapter lists not implemented",
-        }),
-      );
-    }
     const probe = await adapter.probe(ctx);
     if (!probe.ok) {
       const status = probe.status ?? "error";

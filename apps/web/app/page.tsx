@@ -10,8 +10,8 @@ type Note = { id: string; title: string; path: string; updated_at: string };
 const SOURCES = [
   { id: "obsidian", label: "Obsidian", hint: "明文 S3 前缀" },
   { id: "siyuan", label: "思源", hint: "内核 API 或明文 data/" },
-  { id: "notion", label: "Notion", hint: "探活 token，列表稍后" },
-  { id: "feishu", label: "飞书", hint: "探活应用凭证，列表稍后" },
+  { id: "notion", label: "Notion", hint: "同步页面与数据库行" },
+  { id: "feishu", label: "飞书", hint: "同步知识库 docx" },
 ] as const;
 
 export default function HomePage() {

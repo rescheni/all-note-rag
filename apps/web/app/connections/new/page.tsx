@@ -208,7 +208,7 @@ function NewConnectionForm() {
           <input name="token" type="password" required />
           <label>workspace_id（可选）</label>
           <input name="workspace_id" />
-          <p className="muted">v1 只探活 token，列表尚未实现。保存后同步会成功且无笔记。</p>
+          <p className="muted">同步页面与数据库行。需要真实 Integration token；单元测试使用 mock，不打外网。</p>
           <p><button type="submit">保存并同步</button></p>
         </form>
       )}
@@ -222,7 +222,7 @@ function NewConnectionForm() {
           <input name="app_secret" type="password" required />
           <label>wiki_space_id（可选）</label>
           <input name="wiki_space_id" />
-          <p className="muted">v1 只探活 tenant_access_token，列表尚未实现。</p>
+          <p className="muted">同步知识库 docx。需要真实应用凭证；未填 wiki_space_id 时列表为空。测试使用 mock。</p>
           <p><button type="submit">保存并同步</button></p>
         </form>
       )}
