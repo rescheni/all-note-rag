@@ -4,11 +4,29 @@ import Link from "next/link";
 import { api, getToken } from "@/lib/api";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
 
-type Hit = { note_id: string; title: string; path: string; snippet: string; preview_url: string; source_block_id?: string };
+type SourceHit = {
+  note_id: string;
+  title: string;
+  path: string;
+  snippet: string;
+  preview_url: string;
+  source_block_id?: string;
+  match?: "keyword" | "path";
+};
+type SimilarHit = {
+  note_id: string;
+  title: string;
+  path: string;
+  snippet: string;
+  preview_url: string;
+  score: number;
+};
 
 export default function SearchPage() {
   const [space, setSpace] = useState<Space | null>(null);
-  const [hits, setHits] = useState<Hit[]>([]);
+  const [results, setResults] = useState<SourceHit[]>([]);
+  const [similar, setSimilar] = useState<SimilarHit[]>([]);
+  const [didSearch, setDidSearch] = useState(false);
   const [err, setErr] = useState("");
   useEffect(() => {
     if (!getToken()) { location.href = "/login"; return; }
@@ -22,8 +40,12 @@ export default function SearchPage() {
     const q = String(new FormData(e.currentTarget).get("q") ?? "");
     setErr("");
     try {
-      const out = await api<{ results: Hit[] }>(`/v1/spaces/${space.id}/search?q=${encodeURIComponent(q)}`);
-      setHits(out.results);
+      const out = await api<{ results?: SourceHit[]; similar?: SimilarHit[] }>(
+        `/v1/spaces/${space.id}/search?q=${encodeURIComponent(q)}`,
+      );
+      setResults(out.results ?? []);
+      setSimilar(out.similar ?? []);
+      setDidSearch(true);
     } catch (er) {
       setErr(er instanceof Error ? er.message : "搜索失败");
     }
@@ -38,15 +60,32 @@ export default function SearchPage() {
         <button type="submit" disabled={!space}>搜索</button>
       </form>
       {err && <p className="err">{err}</p>}
-      <ul className="list card">
-        {hits.map((h) => (
-          <li key={h.note_id + (h.source_block_id ?? "")}>
-            <Link href={h.preview_url}>{h.title}</Link>
-            <div className="muted">{h.path}</div>
-            <div>{h.snippet}</div>
-          </li>
-        ))}
-      </ul>
+      {didSearch && (
+        <>
+          <h2>源文件</h2>
+          <ul className="list card">
+            {results.length === 0 && <li className="muted">无源文件命中</li>}
+            {results.map((h) => (
+              <li key={h.note_id + (h.source_block_id ?? "")}>
+                <Link href={h.preview_url}>{h.title}</Link>
+                <div className="muted">{h.path}</div>
+                <div>{h.snippet}</div>
+              </li>
+            ))}
+          </ul>
+          <h2>相似文件</h2>
+          <ul className="list card">
+            {similar.length === 0 && <li className="muted">无相似文件</li>}
+            {similar.map((h) => (
+              <li key={h.note_id}>
+                <Link href={h.preview_url}>{h.title}</Link>
+                <div className="muted">{h.path}</div>
+                <div>{h.snippet}</div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </>
   );
 }

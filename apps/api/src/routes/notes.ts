@@ -1,10 +1,18 @@
 import { Hono } from "hono";
 import { toFtsTokens, toTsQueryTokens } from "@note-hub/core";
 import { renderPreviewHtml } from "@note-hub/preview";
+import {
+  averageVectors,
+  clipQuote,
+  embedTexts,
+  formatVector,
+  parseEmbedding,
+  previewUrl,
+  SIMILAR_LIMIT,
+} from "@note-hub/retrieve";
 import { query } from "../db.ts";
 import { errors } from "../errors.ts";
 import { loadMembership, requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
-import { env } from "../env.ts";
 import { getObjectBytes, getObjectText } from "../s3.ts";
 import { extractBlocks } from "@note-hub/normalize";
 
@@ -118,6 +126,71 @@ noteRoutes.get("/notes/:id/assets", async (c) => {
   return new Response(Buffer.from(bytes), { headers: { "content-type": type } });
 });
 
+type SimilarRow = {
+  note_id: string;
+  title: string;
+  path: string;
+  snippet: string | null;
+  score: number | string | null;
+};
+
+async function similarNotesInSpace(
+  spaceId: string,
+  embedding: number[],
+  excludeIds: string[],
+  limit = SIMILAR_LIMIT,
+): Promise<{
+  note_id: string;
+  title: string;
+  path: string;
+  snippet: string;
+  preview_url: string;
+  score: number;
+}[]> {
+  if (!embedding.length) return [];
+  try {
+    const r = await query<SimilarRow>(
+      `SELECT note_id, title, path, snippet, score FROM (
+         SELECT DISTINCT ON (n.id)
+           n.id AS note_id,
+           n.title,
+           n.path,
+           left(ch.text, 180) AS snippet,
+           (1 - (ch.embedding <=> $2::vector))::float8 AS score
+         FROM chunks ch
+         INNER JOIN notes n ON n.id = ch.note_id AND n.deleted_at IS NULL
+         WHERE n.space_id = $1 AND ch.space_id = $1
+           AND ch.embedding IS NOT NULL
+           AND NOT (n.id = ANY($3::uuid[]))
+         ORDER BY n.id, ch.embedding <=> $2::vector
+       ) s
+       ORDER BY score DESC NULLS LAST
+       LIMIT $4`,
+      [spaceId, formatVector(embedding), excludeIds, limit],
+    );
+    return r.rows.map((row) => ({
+      note_id: row.note_id,
+      title: row.title,
+      path: row.path,
+      snippet: clipQuote(row.snippet ?? "", 180),
+      preview_url: previewUrl(row.note_id),
+      score: Number(row.score ?? 0),
+    }));
+  } catch (e) {
+    console.error(JSON.stringify({ level: "error", message: "similar search failed", error: String(e) }));
+    return [];
+  }
+}
+
+async function noteAverageEmbedding(noteId: string): Promise<number[]> {
+  const r = await query<{ embedding: unknown }>(
+    `SELECT embedding FROM chunks WHERE note_id = $1 AND embedding IS NOT NULL ORDER BY created_at`,
+    [noteId],
+  );
+  const vecs = r.rows.map((row) => parseEmbedding(row.embedding)).filter((v): v is number[] => Boolean(v?.length));
+  return averageVectors(vecs);
+}
+
 noteRoutes.get("/spaces/:id/search", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
@@ -125,14 +198,21 @@ noteRoutes.get("/spaces/:id/search", async (c) => {
   const denied = roleDenied(c, gate);
   if (denied) return denied;
   const q = (c.req.query("q") ?? "").trim();
-  if (!q) return c.json({ results: [] });
+  if (!q) return c.json({ query: q, results: [], similar: [] });
   const like = "%" + q + "%";
   const tokens = toTsQueryTokens(q);
-  const results = await query(
-    `SELECT n.id, n.title, n.path, n.hash,
+  const results = await query<{
+    id: string;
+    title: string;
+    path: string;
+    snippet: string | null;
+    source_block_id: string | null;
+    match: "keyword" | "path";
+  }>(
+    `SELECT n.id, n.title, n.path,
             COALESCE(c.snippet, left(n.markdown, 180)) AS snippet,
             c.source_block_id,
-            GREATEST(c.rank, similarity_title) AS rank
+            CASE WHEN n.path ILIKE $2 THEN 'path' ELSE 'keyword' END AS match
      FROM notes n
      LEFT JOIN LATERAL (
        SELECT ch.text AS snippet, b.source_block_id,
@@ -150,21 +230,44 @@ noteRoutes.get("/spaces/:id/search", async (c) => {
      WHERE n.space_id = $1 AND n.deleted_at IS NULL
        AND (n.title ILIKE $2 OR n.markdown ILIKE $2 OR n.path ILIKE $2
             OR ($3 <> '' AND c.rank IS NOT NULL))
-     ORDER BY rank DESC NULLS LAST, n.updated_at DESC
+     ORDER BY GREATEST(c.rank, t.similarity_title) DESC NULLS LAST, n.updated_at DESC
      LIMIT 30`,
     [spaceId, like, tokens || ""],
   );
+  const sourceHits = results.rows.map((row) => ({
+    note_id: row.id,
+    title: row.title,
+    path: row.path,
+    snippet: clipQuote(row.snippet ?? "", 180),
+    source_block_id: row.source_block_id,
+    preview_url: previewUrl(row.id, row.source_block_id),
+    match: row.match,
+  }));
+  let similar: Awaited<ReturnType<typeof similarNotesInSpace>> = [];
+  try {
+    const [emb] = await embedTexts([q]);
+    if (emb?.length) {
+      similar = await similarNotesInSpace(
+        spaceId,
+        emb,
+        sourceHits.map((h) => h.note_id),
+      );
+    }
+  } catch (e) {
+    console.error(JSON.stringify({ level: "error", message: "embed query failed", error: String(e) }));
+  }
   void toFtsTokens;
-  return c.json({
-    results: results.rows.map((row) => ({
-      note_id: row.id,
-      title: row.title,
-      path: row.path,
-      snippet: row.snippet,
-      source_block_id: row.source_block_id,
-      preview_url: `/notes/${row.id}${row.source_block_id ? `#b-${row.source_block_id}` : ""}`,
-    })),
-  });
+  return c.json({ query: q, results: sourceHits, similar });
+});
+
+noteRoutes.get("/notes/:id/similar", async (c) => {
+  const user = c.get("user");
+  const note = await noteIfMember(user.id, c.req.param("id"));
+  if (!note) return errors.notFound(c);
+  const emb = await noteAverageEmbedding(note.id);
+  if (!emb.length) return c.json({ similar: [] });
+  const similar = await similarNotesInSpace(note.space_id, emb, [note.id]);
+  return c.json({ similar });
 });
 
 function stripFm(md: string): string {

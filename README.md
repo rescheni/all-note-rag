@@ -103,6 +103,13 @@ curl -X POST "http://127.0.0.1:3001/v1/hooks/s3" \
 
 可选：`bash scripts/minio-notify.sh`（有 `mc` 时把桶事件指到 `http://127.0.0.1:3001/v1/hooks/s3`；没有 `mc` 则跳过且不失败）。
 
+
+## 自动同步与搜索
+
+- API 每 **30 秒**（启动时立即一次）对所有 `active` 连接 `enqueueSync`。增量 `listChanges` 按 etag / last_edited_time / obj_edit_time 跳过未改文件；启动时尽力跑 `scripts/minio-notify.sh`。
+- 搜索 `GET /v1/spaces/:id/search` 返回 **源文件** `results`（keyword / path / FTS）和 **相似文件** `similar`（向量近邻，排除已命中 id）。`GET /v1/notes/:id/similar` 用于预览页。
+- 嵌入随同步写入 `chunks.embedding`；hash 未变但向量为空时下次同步会补齐。永不写回源。
+
 ## 中文 FTS
 
 P0 使用 `simple` 配置 + **双 gram** 写入 `chunks.fts`（应用层把 CJK 切成重叠二字再 `to_tsvector('simple', ...)`）。

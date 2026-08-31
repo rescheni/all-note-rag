@@ -72,6 +72,48 @@ async function upsertBlocks(noteId: string, note: NormalizedNote) {
   return idBySource;
 }
 
+async function writeEmbeddings(rows: { id: string; text: string }[], noteId?: string): Promise<void> {
+  if (!rows.length) return;
+  try {
+    const vectors = await embedTexts(rows.map((c) => c.text));
+    const model = embeddingModelId();
+    for (let i = 0; i < rows.length; i++) {
+      const vec = vectors[i];
+      if (!vec?.length) continue;
+      await query(
+        `UPDATE chunks SET embedding = $2::vector, embedding_model = $3, updated_at = now() WHERE id = $1`,
+        [rows[i].id, formatVector(vec), model],
+      );
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(JSON.stringify({ level: "error", message: "embed chunks failed", error: msg, note_id: noteId ?? null }));
+  }
+}
+
+/** Embed chunks whose embedding is still NULL (hash skip / old notes on auto-sync). */
+async function embedNullChunks(opts: { noteId?: string; connectionId?: string }): Promise<void> {
+  const params: unknown[] = [];
+  const where: string[] = ["ch.embedding IS NULL"];
+  if (opts.noteId) {
+    params.push(opts.noteId);
+    where.push(`ch.note_id = $${params.length}`);
+  }
+  if (opts.connectionId) {
+    params.push(opts.connectionId);
+    where.push(`n.connection_id = $${params.length}`);
+    where.push("n.deleted_at IS NULL");
+  }
+  const r = await query<{ id: string; text: string }>(
+    `SELECT ch.id, ch.text
+     FROM chunks ch
+     INNER JOIN notes n ON n.id = ch.note_id
+     WHERE ${where.join(" AND ")}`,
+    params,
+  );
+  await writeEmbeddings(r.rows, opts.noteId);
+}
+
 async function writeChunks(noteId: string, spaceId: string, note: NormalizedNote, blockIds: Map<string, string>) {
   await query("DELETE FROM chunks WHERE note_id = $1", [noteId]);
   let heading = "";
@@ -90,22 +132,7 @@ async function writeChunks(noteId: string, spaceId: string, note: NormalizedNote
     );
     if (row.rows[0]?.id) inserted.push({ id: row.rows[0].id, text });
   }
-  if (!inserted.length) return;
-  try {
-    const vectors = await embedTexts(inserted.map((c) => c.text));
-    const model = embeddingModelId();
-    for (let i = 0; i < inserted.length; i++) {
-      const vec = vectors[i];
-      if (!vec?.length) continue;
-      await query(
-        `UPDATE chunks SET embedding = $2::vector, embedding_model = $3, updated_at = now() WHERE id = $1`,
-        [inserted[i].id, formatVector(vec), model],
-      );
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    console.error(JSON.stringify({ level: "error", message: "embed chunks failed", error: msg, note_id: noteId }));
-  }
+  await writeEmbeddings(inserted, noteId);
 }
 
 async function resolveLinks(connectionId: string, fromNoteId: string, note: NormalizedNote) {
@@ -171,6 +198,7 @@ async function processNote(
   );
   const row = existing.rows[0];
   if (row && row.hash === note.hash && !(await isDeleted(row.id))) {
+    await embedNullChunks({ noteId: row.id });
     return { status: "skip" };
   }
 
@@ -338,6 +366,7 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
           failed,
         }),
       );
+      await embedNullChunks({ connectionId: conn.id });
       if (upsertedNotes.length) {
         try {
           await runPostSyncGrowth(conn.space_id, upsertedNotes);
@@ -403,6 +432,7 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
         failed,
       }),
     );
+    await embedNullChunks({ connectionId: conn.id });
     if (upsertedNotes.length) {
       try {
         await runPostSyncGrowth(conn.space_id, upsertedNotes);

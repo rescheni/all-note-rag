@@ -11,7 +11,10 @@ import {
   rrfMerge,
   localProject,
   EMBEDDING_DIM,
+  searchSourcesAndSimilar,
+  similarToEmbedding,
   type RetrieveChunk,
+  type SearchCorpusNote,
 } from "../src/index.ts";
 
 const SPACE = "space-a";
@@ -300,5 +303,77 @@ describe("loadVectorChunksViaSql", () => {
     expect(params[0]).toBe(SPACE);
     expect(typeof params[1]).toBe("string");
     expect(params[3]).toBe(10);
+  });
+});
+
+
+describe("searchSourcesAndSimilar", () => {
+  const q = "紫铜灯笼检索词";
+  const qEmb = localProject(q);
+  const noise = localProject("zzzz-unrelated-qwerty-noise-token");
+  const fixture: SearchCorpusNote[] = [
+    {
+      space_id: SPACE,
+      note_id: "n-source",
+      title: "日记",
+      path: "Daily/2026-08-29.md",
+      markdown: "今天看到紫铜灯笼检索词写在门上。",
+      chunks: [
+        {
+          text: "今天看到紫铜灯笼检索词写在门上。",
+          source_block_id: "src-para",
+          embedding: noise,
+        },
+      ],
+    },
+    {
+      space_id: SPACE,
+      note_id: "n-similar",
+      title: "提灯收藏",
+      path: "Collections/lantern.md",
+      markdown: "牛奶鸡蛋面包购物清单，与查询无关。",
+      chunks: [
+        {
+          text: "牛奶鸡蛋面包购物清单，与查询无关。",
+          source_block_id: "sim-para",
+          embedding: qEmb,
+        },
+      ],
+    },
+    {
+      space_id: "other-space",
+      note_id: "n-leak",
+      title: "秘密",
+      path: "secret.md",
+      markdown: "紫铜灯笼检索词 其他空间",
+      chunks: [{ text: "紫铜灯笼检索词 其他空间", embedding: qEmb }],
+    },
+  ];
+
+  it("puts keyword hit in results and a different embedded note in similar, not duplicated", () => {
+    const out = searchSourcesAndSimilar(SPACE, q, fixture, { queryEmbedding: qEmb });
+    expect(out.query).toBe(q);
+    expect(out.results.map((r) => r.note_id)).toEqual(["n-source"]);
+    expect(out.results[0]?.path).toBe("Daily/2026-08-29.md");
+    expect(out.results[0]?.match).toBe("keyword");
+    expect(out.results[0]?.preview_url).toContain("/notes/n-source");
+    expect(out.similar.map((s) => s.note_id)).toEqual(["n-similar"]);
+    expect(out.similar[0]?.path).toBe("Collections/lantern.md");
+    expect(out.similar[0]?.score).toBeGreaterThan(0.5);
+    const ids = [...out.results, ...out.similar].map((x) => x.note_id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).not.toContain("n-leak");
+  });
+
+  it("path match is tagged path and similar is empty without embeddings", () => {
+    const out = searchSourcesAndSimilar(SPACE, "Daily/2026", fixture);
+    expect(out.results[0]?.note_id).toBe("n-source");
+    expect(out.results[0]?.match).toBe("path");
+    expect(out.similar).toEqual([]);
+  });
+
+  it("never leaks other spaces via similarToEmbedding", () => {
+    const hits = similarToEmbedding(SPACE, qEmb, fixture, { excludeIds: ["n-source"] });
+    expect(hits.map((h) => h.note_id)).toEqual(["n-similar"]);
   });
 });

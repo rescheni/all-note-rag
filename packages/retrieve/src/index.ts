@@ -27,6 +27,7 @@ export {
   embedTexts,
   localProject,
   cosine,
+  averageVectors,
   rrfMerge,
   formatVector,
   parseEmbedding,
@@ -36,3 +37,15 @@ export {
   DEFAULT_EMBEDDING_MODEL,
   type EmbedTextsOpts,
 } from "./embed.ts";
+
+export {
+  searchSourcesAndSimilar,
+  similarToEmbedding,
+  SIMILAR_LIMIT,
+  SOURCE_RESULT_LIMIT,
+  type SourceSearchHit,
+  type SimilarSearchHit,
+  type SearchCorpusNote,
+  type SearchCorpusChunk,
+  type SearchSourcesOpts,
+} from "./search.ts";

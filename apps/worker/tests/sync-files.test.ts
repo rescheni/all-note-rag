@@ -97,12 +97,38 @@ describe("runSyncFiles", () => {
     );
     expect(notes.rows.map((n) => n.path)).toEqual(["Daily/x.md"]);
     expect(notes.rows.some((n) => n.path === "Welcome.md")).toBe(false);
-    const chunks = await query<{ n: string }>(
-      `SELECT count(*)::text AS n FROM chunks ch
+    const chunks = await query<{ n: string; embedded: string }>(
+      `SELECT count(*)::text AS n, count(ch.embedding)::text AS embedded
+       FROM chunks ch
        INNER JOIN notes n ON n.id = ch.note_id
        WHERE n.connection_id = $1`,
       [connId],
     );
     expect(Number(chunks.rows[0]?.n ?? 0)).toBeGreaterThan(0);
+    expect(Number(chunks.rows[0]?.embedded ?? 0)).toBe(Number(chunks.rows[0]?.n ?? 0));
+  });
+
+  it("backfills null embeddings when hash skip on next auto-sync", async () => {
+    await runSyncFiles(connId, [`${prefix}/Daily/x.md`]);
+    await query(
+      `UPDATE chunks SET embedding = NULL
+       WHERE note_id IN (SELECT id FROM notes WHERE connection_id = $1)`,
+      [connId],
+    );
+    const before = await query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM chunks ch
+       INNER JOIN notes n ON n.id = ch.note_id
+       WHERE n.connection_id = $1 AND ch.embedding IS NULL`,
+      [connId],
+    );
+    expect(Number(before.rows[0]?.n ?? 0)).toBeGreaterThan(0);
+    await runSyncFiles(connId, [`${prefix}/Daily/x.md`]);
+    const after = await query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM chunks ch
+       INNER JOIN notes n ON n.id = ch.note_id
+       WHERE n.connection_id = $1 AND ch.embedding IS NULL`,
+      [connId],
+    );
+    expect(Number(after.rows[0]?.n ?? 1)).toBe(0);
   });
 });

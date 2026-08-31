@@ -41,6 +41,22 @@ export function localProject(text: string): number[] {
   return l2normalize(Array.from(vec));
 }
 
+export function averageVectors(vecs: number[][]): number[] {
+  const usable = vecs.filter((v) => v.length > 0);
+  if (!usable.length) return [];
+  const dim = usable[0]!.length;
+  const acc = new Array(dim).fill(0);
+  let n = 0;
+  for (const v of usable) {
+    if (v.length !== dim) continue;
+    for (let i = 0; i < dim; i++) acc[i] += v[i] ?? 0;
+    n++;
+  }
+  if (!n) return [];
+  for (let i = 0; i < dim; i++) acc[i] /= n;
+  return acc;
+}
+
 export function cosine(a: number[], b: number[]): number {
   if (!a.length || !b.length || a.length !== b.length) return 0;
   let dot = 0;
