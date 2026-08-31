@@ -16,4 +16,22 @@ new Worker(
   { connection, concurrency: 4 },
 );
 
-console.log(JSON.stringify({ level: "info", message: "worker listening on sync.tick" }));
+new Worker(
+  "sync.file",
+  async (job) => {
+    const data = job.data as { connectionId: string; keys: string[] };
+    console.log(
+      JSON.stringify({
+        level: "info",
+        job_id: job.id,
+        connection_id: data.connectionId,
+        keys: data.keys?.length ?? 0,
+        message: "file sync start",
+      }),
+    );
+    await runSync(data.connectionId, { keys: data.keys ?? [] });
+  },
+  { connection, concurrency: 8 },
+);
+
+console.log(JSON.stringify({ level: "info", message: "worker listening on sync.tick and sync.file" }));

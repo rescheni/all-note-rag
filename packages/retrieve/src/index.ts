@@ -4,12 +4,15 @@ export {
   previewUrl,
   clipQuote,
   loadChunksViaSql,
+  loadVectorChunksViaSql,
+  hitKey,
   UNKNOWN_ANSWER,
   type RetrieveChunk,
   type RetrieveHit,
   type HybridRetrieveOpts,
   type HybridRetrieveResult,
   type LoadChunks,
+  type LoadVectorChunks,
   type SqlQuery,
 } from "./hybrid.ts";
 export {
@@ -20,3 +23,16 @@ export {
   type AskResponse,
   type ChatConfig,
 } from "./answer.ts";
+export {
+  embedTexts,
+  localProject,
+  cosine,
+  rrfMerge,
+  formatVector,
+  parseEmbedding,
+  embeddingModelId,
+  EMBEDDING_DIM,
+  LOCAL_EMBEDDING_MODEL,
+  DEFAULT_EMBEDDING_MODEL,
+  type EmbedTextsOpts,
+} from "./embed.ts";

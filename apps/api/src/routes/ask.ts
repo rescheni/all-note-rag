@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import {
   composeAskAnswer,
+  embedTexts,
   hybridRetrieve,
   loadChunksViaSql,
+  loadVectorChunksViaSql,
   UNKNOWN_ANSWER,
 } from "@note-hub/retrieve";
 import {
@@ -19,6 +21,8 @@ export const askRoutes = new Hono<{ Variables: Vars }>();
 askRoutes.use("*", requireUser);
 
 const loadChunks = loadChunksViaSql((text, params) => query(text, params));
+const loadVectorChunks = loadVectorChunksViaSql((text, params) => query(text, params));
+
 
 function chatConfig() {
   const baseUrl = process.env.OPENAI_BASE_URL?.trim();
@@ -82,8 +86,17 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
     ? body.note_ids.filter((id): id is string => typeof id === "string")
     : undefined;
 
+  let queryEmbedding: number[] | undefined;
+  if (q.trim()) {
+    try {
+      const [emb] = await embedTexts([q]);
+      queryEmbedding = emb;
+    } catch (e) {
+      console.error(JSON.stringify({ level: "error", message: "embed query failed", error: String(e) }));
+    }
+  }
   const [retrieved, growthSummary, writingSummary] = await Promise.all([
-    hybridRetrieve(spaceId, q, { noteIds, loadChunks }),
+    hybridRetrieve(spaceId, q, { noteIds, loadChunks, loadVectorChunks, queryEmbedding }),
     growthOnAsk(spaceId, user.id, q),
     writingHealthOnAsk(spaceId, user.id, q),
   ]);

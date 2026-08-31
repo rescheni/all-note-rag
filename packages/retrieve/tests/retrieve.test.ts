@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   hybridRetrieve,
   loadChunksViaSql,
+  loadVectorChunksViaSql,
   composeExtractiveAnswer,
   composeAskAnswer,
   UNKNOWN_ANSWER,
+  embedTexts,
+  cosine,
+  rrfMerge,
+  localProject,
+  EMBEDDING_DIM,
   type RetrieveChunk,
 } from "../src/index.ts";
 
@@ -171,5 +177,128 @@ describe("loadChunksViaSql", () => {
     expect(params[1]).toBe("%睡眠%");
     expect(r.hits[0]?.source_block_id).toBe("sleep-para");
     expect(r.hits[0]?.preview_url).toBe("/notes/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee#b-sleep-para");
+  });
+});
+
+
+describe("embed + rrf", () => {
+  it("local projector is deterministic, 1536-d, L2-normalized, no network", async () => {
+    const prevB = process.env.OPENAI_BASE_URL;
+    const prevK = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_API_KEY;
+    let fetched = false;
+    const boom: typeof fetch = async () => {
+      fetched = true;
+      throw new Error("network");
+    };
+    try {
+      const [a, b] = await embedTexts(["铜灯笼 pineapple", "铜灯笼 pineapple"], { fetch: boom });
+      expect(fetched).toBe(false);
+      expect(a).toHaveLength(EMBEDDING_DIM);
+      expect(a).toEqual(b);
+      expect(a).toEqual(localProject("铜灯笼 pineapple"));
+      const n = Math.hypot(...a);
+      expect(n).toBeCloseTo(1, 5);
+      expect(cosine(a, a)).toBeCloseTo(1, 5);
+      const other = localProject("zzzz-unrelated-qwerty");
+      expect(cosine(a, other)).toBeLessThan(cosine(a, localProject("铜灯笼 pineapple extra")));
+    } finally {
+      if (prevB === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = prevB;
+      if (prevK === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = prevK;
+    }
+  });
+
+  it("rrfMerge boosts items that appear in both lists", () => {
+    const fused = rrfMerge(
+      [
+        ["sem", "fts"],
+        ["sem", "noise"],
+      ],
+      60,
+    );
+    expect(fused[0]?.id).toBe("sem");
+    expect(fused.map((x) => x.id)).toContain("fts");
+  });
+
+  it("rrf prefers a semantically overlapping hashed-embed chunk; FTS-only still returned", async () => {
+    const q = "copper lantern retrieval token";
+    const prevB = process.env.OPENAI_BASE_URL;
+    const prevK = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      const [qEmb, semEmb, noiseEmb] = await embedTexts([
+        q,
+        "copper lantern retrieval token appears in the hashed vault note",
+        "zzzz qwerty unrelated embedding space",
+      ]);
+      const chunks: RetrieveChunk[] = [
+        {
+          space_id: SPACE,
+          note_id: "n-sem",
+          title: "语义笔记",
+          text: "copper lantern retrieval token appears in the hashed vault note",
+          source_block_id: "sem-block",
+          embedding: semEmb,
+        },
+        {
+          space_id: SPACE,
+          note_id: "n-fts",
+          title: "购物清单",
+          text: "copper lantern retrieval token 牛奶鸡蛋",
+          source_block_id: "fts-block",
+        },
+        {
+          space_id: SPACE,
+          note_id: "n-noise",
+          title: "无关",
+          text: "zzzz qwerty unrelated",
+          source_block_id: "noise-block",
+          embedding: noiseEmb,
+        },
+      ];
+      const r = await hybridRetrieve(SPACE, q, { chunks, queryEmbedding: qEmb });
+      expect(r.unknown).toBe(false);
+      expect(r.hits[0]?.note_id).toBe("n-sem");
+      expect(r.hits.map((h) => h.note_id)).toContain("n-fts");
+    } finally {
+      if (prevB === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = prevB;
+      if (prevK === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = prevK;
+    }
+  });
+
+  it("empty query unknown even with embeddings", async () => {
+    const r = await hybridRetrieve(SPACE, "   ", {
+      chunks: corpus,
+      queryEmbedding: localProject("睡眠"),
+    });
+    expect(r.unknown).toBe(true);
+    expect(r.hits).toEqual([]);
+  });
+});
+
+describe("loadVectorChunksViaSql", () => {
+  it("orders by cosine distance and keeps space ACL", async () => {
+    let sql = "";
+    let params: unknown[] = [];
+    const run = async (text: string, p?: unknown[]) => {
+      sql = text;
+      params = p ?? [];
+      return { rows: [] };
+    };
+    const load = loadVectorChunksViaSql(run);
+    await load(SPACE, localProject("睡眠"), { limit: 10 });
+    expect(sql).toContain("n.space_id = $1");
+    expect(sql).toContain("deleted_at IS NULL");
+    expect(sql).toContain("embedding <=> $2::vector");
+    expect(sql).toContain("ch.embedding IS NOT NULL");
+    expect(params[0]).toBe(SPACE);
+    expect(typeof params[1]).toBe("string");
+    expect(params[3]).toBe(10);
   });
 });

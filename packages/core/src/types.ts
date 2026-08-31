@@ -67,6 +67,8 @@ export type AdapterContext = {
   connection: ConnectionRecord;
   secrets: ConnectionSecrets | null;
   cursor: Record<string, unknown> | null;
+  /** Full object key when doing file-level sync (skip ListObjects). */
+  objectKey?: string;
 };
 
 export type ProbeResult = {

@@ -365,27 +365,36 @@ export class SiYuanAdapter implements Adapter {
     }
     const prefix = workspacePrefix(ctx);
     const store = this.storeFor(ctx);
+    const payloadFromKey = async (key: string): Promise<NotePayload | null> => {
+      const bytes = await store.get(key);
+      if (!bytes) return null;
+      const raw = new TextDecoder().decode(bytes);
+      let title = source_id;
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const props = (parsed.Properties ?? parsed.properties ?? {}) as Record<string, unknown>;
+        if (typeof props.title === "string" && props.title) title = props.title;
+      } catch {
+        return null;
+      }
+      const k = posixVaultPath(key);
+      const rel = prefix && k.startsWith(prefix + "/") ? k.slice(prefix.length + 1) : k;
+      return { source_id, path: rel, title, raw };
+    };
+    if (ctx.objectKey) {
+      const hit = await payloadFromKey(ctx.objectKey);
+      if (hit) return hit;
+    }
+    const keysMap = (ctx.cursor as { keys?: Record<string, string> } | null)?.keys;
+    if (keysMap?.[source_id]) {
+      const hit = await payloadFromKey(keysMap[source_id]);
+      if (hit) return hit;
+    }
     const listed = await store.list(prefix);
     const needle = `${source_id}.sy`;
-    const hit = listed.find((o) => o.key.endsWith("/" + needle) || o.key === needle || posixVaultPath(o.key).endsWith("/" + needle));
-    if (!hit) return null;
-    const bytes = await store.get(hit.key);
-    if (!bytes) return null;
-    const raw = new TextDecoder().decode(bytes);
-    let title = source_id;
-    try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      const props = (parsed.Properties ?? parsed.properties ?? {}) as Record<string, unknown>;
-      if (typeof props.title === "string" && props.title) title = props.title;
-    } catch {
-      return null;
-    }
-    const rel = (() => {
-      const k = posixVaultPath(hit.key);
-      if (prefix && k.startsWith(prefix + "/")) return k.slice(prefix.length + 1);
-      return k;
-    })();
-    return { source_id, path: rel, title, raw };
+    const listedHit = listed.find((o) => o.key.endsWith("/" + needle) || o.key === needle || posixVaultPath(o.key).endsWith("/" + needle));
+    if (!listedHit) return null;
+    return payloadFromKey(listedHit.key);
   }
 
   async fetchAsset(ctx: AdapterContext, ref: string): Promise<Uint8Array> {

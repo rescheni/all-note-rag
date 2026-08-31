@@ -115,6 +115,9 @@ importers:
       '@note-hub/preview':
         specifier: workspace:*
         version: link:../../packages/preview
+      '@note-hub/retrieve':
+        specifier: workspace:*
+        version: link:../../packages/retrieve
       '@note-hub/skills-runtime':
         specifier: workspace:*
         version: link:../../packages/skills-runtime
@@ -137,6 +140,9 @@ importers:
       typescript:
         specifier: ^5.8.2
         version: 5.9.3
+      vitest:
+        specifier: ^2.1.9
+        version: 2.1.9(@types/node@22.20.1)
 
   packages/adapters:
     dependencies:

@@ -11,7 +11,7 @@ import { query } from "../db.ts";
 import { env } from "../env.ts";
 import { errors, jsonError } from "../errors.ts";
 import { requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
-import { enqueueSync } from "../queue.ts";
+import { enqueueSync, enqueueSyncFiles } from "../queue.ts";
 import { decryptConnectionSecrets, publicConnection } from "../connection-util.ts";
 
 type Vars = { user: AuthUser };
@@ -143,6 +143,19 @@ connectionRoutes.post("/connections/:id/sync", async (c) => {
   const denied = roleDenied(c, gate);
   if (denied) return denied;
   if (conn.status === "encrypted_unreadable" || conn.config?.e2ee) return errors.encrypted(c);
+  let body: { keys?: unknown } = {};
+  try {
+    body = (await c.req.json()) as { keys?: unknown };
+  } catch {
+    body = {};
+  }
+  const keys = Array.isArray(body.keys)
+    ? body.keys.filter((k): k is string => typeof k === "string" && k.trim().length > 0)
+    : [];
+  if (keys.length) {
+    const q = await enqueueSyncFiles(id, keys);
+    return c.json({ ok: true, job_id: q.jobId, keys });
+  }
   const q = await enqueueSync(id);
   if (!q.queued && q.reason === "sync_in_progress") return errors.syncInProgress(c);
   return c.json({ ok: true, job_id: `sync:${id}` });

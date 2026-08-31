@@ -24,6 +24,7 @@
 | VAULT_BUCKET | 夹具 vault 所在桶（默认 obsidian-src） |
 | API_PORT / WEB_ORIGIN / NEXT_PUBLIC_API_URL | API 与前端 |
 | OPENAI_BASE_URL / OPENAI_API_KEY / CHAT_MODEL | 可选。不设则问答走抽取式作答 |
+| EMBEDDING_MODEL | 可选，默认 `text-embedding-3-small`。未配 OpenAI 时用本地 hashed n-gram 投影（1536 维），不打外网 |
 
 密钥**永远不会**出现在 API 响应里。
 
@@ -77,10 +78,36 @@ pnpm --filter @note-hub/web dev
 
 测试：`pnpm test`。
 
+## 文件级同步
+
+全量 `POST /v1/connections/:id/sync`（无 `keys` 或空数组）仍会 ListObjects 整个前缀。传入 `keys` 则**只拉这些对象**，不列举前缀：
+
+```bash
+# 编辑者角色。keys 可以是完整对象键或 vault 相对路径
+curl -X POST "http://127.0.0.1:3001/v1/connections/$CONNECTION_ID/sync" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"keys":["vault1/Daily/2026-08-29.md"]}'
+```
+
+MinIO / S3 事件通知（无用户会话，共享 `HUB_SECRET`，请求头 `x-hub-secret`）：
+
+```bash
+curl -X POST "http://127.0.0.1:3001/v1/hooks/s3" \
+  -H "x-hub-secret: $HUB_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"bucket":"obsidian-src","key":"vault1/Daily/x.md","eventName":"s3:ObjectCreated:Put"}'
+```
+
+也接受 S3 通知 JSON（`Records[].s3.bucket.name` + `Records[].s3.object.key`）。按 bucket+prefix 匹配 Connection：Obsidian `remote_prefix`、思源 workspace `workspace_prefix`、中枢桶 `source/{space}/{conn}/` 镜像。没有匹配返回 404。不同文件并行（jobId `syncfile-{connectionId}-{shortHash}`），同一文件合并。永不写回源。
+
+可选：`bash scripts/minio-notify.sh`（有 `mc` 时把桶事件指到 `http://127.0.0.1:3001/v1/hooks/s3`；没有 `mc` 则跳过且不失败）。
+
 ## 中文 FTS
 
 P0 使用 `simple` 配置 + **双 gram** 写入 `chunks.fts`（应用层把 CJK 切成重叠二字再 `to_tsvector('simple', ...)`）。
 搜索同时走 `ILIKE` 子串，保证中文短词可命中。
+Ask 另走向量通道（`chunks.embedding vector(1536)`）再与 FTS **RRF** 融合；无 embedding 的块仍可通过 FTS 召回。未配 OpenAI 时用本地 hashed n-gram 投影，测试不打外网。
 若镜像安装了 zhparser / pg_jieba，可在后续阶段切换配置；当前默认不依赖它们。
 
 ## 硬性边界（P0）

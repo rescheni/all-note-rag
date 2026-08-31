@@ -1,4 +1,5 @@
 import { toFtsTokens, toTsQueryTokens } from "@note-hub/core";
+import { cosine, formatVector, parseEmbedding, rrfMerge } from "./embed.ts";
 
 export const UNKNOWN_ANSWER = "不知道";
 
@@ -10,6 +11,7 @@ export type RetrieveChunk = {
   heading_path?: string | null;
   block_id?: string | null;
   source_block_id?: string | null;
+  embedding?: number[] | null;
 };
 
 export type RetrieveHit = {
@@ -30,12 +32,20 @@ export type LoadChunks = (
   opts?: { noteIds?: string[]; limit?: number },
 ) => Promise<RetrieveChunk[]>;
 
+export type LoadVectorChunks = (
+  spaceId: string,
+  queryEmbedding: number[],
+  opts?: { noteIds?: string[]; limit?: number },
+) => Promise<RetrieveChunk[]>;
+
 export type HybridRetrieveOpts = {
   noteIds?: string[];
   limit?: number;
   /** In-memory corpus for tests; skips loadChunks. */
   chunks?: RetrieveChunk[];
   loadChunks?: LoadChunks;
+  loadVectorChunks?: LoadVectorChunks;
+  queryEmbedding?: number[];
 };
 
 export type HybridRetrieveResult = {
@@ -75,6 +85,26 @@ export function scoreChunk(query: string, chunk: RetrieveChunk): number {
   return score;
 }
 
+export function hitKey(h: { note_id: string; source_block_id?: string | null; block_id?: string | null }): string {
+  return `${h.note_id}::${(h.source_block_id ?? "").trim() || (h.block_id ?? "")}`;
+}
+
+function chunkToHit(ch: RetrieveChunk, rank: number): RetrieveHit {
+  const sourceBlockId = (ch.source_block_id ?? "").trim();
+  const blockId = sourceBlockId || (ch.block_id ?? "");
+  return {
+    note_id: ch.note_id,
+    title: ch.title,
+    space_id: ch.space_id,
+    block_id: blockId,
+    source_block_id: sourceBlockId,
+    text: ch.text,
+    quote: clipQuote(ch.text),
+    rank,
+    preview_url: previewUrl(ch.note_id, sourceBlockId),
+  };
+}
+
 export async function hybridRetrieve(
   spaceId: string,
   queryText: string,
@@ -84,41 +114,81 @@ export async function hybridRetrieve(
   const limit = opts.limit ?? 8;
   if (!q) return { unknown: true, hits: [] };
 
+  const fetchLimit = Math.max(limit * 5, 40);
   let chunks: RetrieveChunk[];
   if (opts.chunks) {
     chunks = opts.chunks;
   } else if (opts.loadChunks) {
     chunks = await opts.loadChunks(spaceId, q, {
       noteIds: opts.noteIds,
-      limit: Math.max(limit * 5, 40),
+      limit: fetchLimit,
     });
   } else {
     chunks = [];
   }
 
   const noteFilter = opts.noteIds && opts.noteIds.length > 0 ? new Set(opts.noteIds) : null;
-  const scored: RetrieveHit[] = [];
+  const ftsHits: RetrieveHit[] = [];
   for (const ch of chunks) {
     if (ch.space_id !== spaceId) continue;
     if (noteFilter && !noteFilter.has(ch.note_id)) continue;
     const rank = scoreChunk(q, ch);
     if (rank <= 0) continue;
-    const sourceBlockId = (ch.source_block_id ?? "").trim();
-    const blockId = sourceBlockId || (ch.block_id ?? "");
-    scored.push({
-      note_id: ch.note_id,
-      title: ch.title,
-      space_id: ch.space_id,
-      block_id: blockId,
-      source_block_id: sourceBlockId,
-      text: ch.text,
-      quote: clipQuote(ch.text),
-      rank,
-      preview_url: previewUrl(ch.note_id, sourceBlockId),
-    });
+    ftsHits.push(chunkToHit(ch, rank));
   }
-  scored.sort((a, b) => b.rank - a.rank || a.title.localeCompare(b.title, "zh"));
-  const hits = scored.slice(0, limit);
+  ftsHits.sort((a, b) => b.rank - a.rank || a.title.localeCompare(b.title, "zh"));
+
+  const qEmb = opts.queryEmbedding;
+  const vecHits: RetrieveHit[] = [];
+  if (qEmb && qEmb.length) {
+    if (opts.loadVectorChunks && !opts.chunks) {
+      const vchunks = await opts.loadVectorChunks(spaceId, qEmb, {
+        noteIds: opts.noteIds,
+        limit: fetchLimit,
+      });
+      for (const ch of vchunks) {
+        if (ch.space_id !== spaceId) continue;
+        if (noteFilter && !noteFilter.has(ch.note_id)) continue;
+        vecHits.push(chunkToHit(ch, 1));
+      }
+    } else {
+      const scored: { hit: RetrieveHit; cos: number }[] = [];
+      for (const ch of chunks) {
+        if (ch.space_id !== spaceId) continue;
+        if (noteFilter && !noteFilter.has(ch.note_id)) continue;
+        const emb = ch.embedding;
+        if (!emb?.length) continue;
+        const cos = cosine(qEmb, emb);
+        if (cos <= 0) continue;
+        scored.push({ hit: chunkToHit(ch, cos), cos });
+      }
+      scored.sort((a, b) => b.cos - a.cos || a.hit.title.localeCompare(b.hit.title, "zh"));
+      for (const s of scored) vecHits.push(s.hit);
+    }
+  }
+
+  if (!vecHits.length) {
+    const hits = ftsHits.slice(0, limit);
+    if (hits.length === 0) return { unknown: true, hits: [] };
+    return { unknown: false, hits };
+  }
+
+  const byKey = new Map<string, RetrieveHit>();
+  for (const h of [...ftsHits, ...vecHits]) {
+    const k = hitKey(h);
+    if (!byKey.has(k)) byKey.set(k, h);
+  }
+  const fused = rrfMerge(
+    [ftsHits.map(hitKey), vecHits.map(hitKey)],
+    60,
+  );
+  const hits: RetrieveHit[] = [];
+  for (const row of fused) {
+    const h = byKey.get(row.id);
+    if (!h) continue;
+    hits.push({ ...h, rank: row.score });
+    if (hits.length >= limit) break;
+  }
   if (hits.length === 0) return { unknown: true, hits: [] };
   return { unknown: false, hits };
 }
@@ -138,7 +208,21 @@ type SqlRow = {
   heading_path: string | null;
   block_uuid: string | null;
   source_block_id: string | null;
+  embedding?: unknown;
 };
+
+function mapSqlRows(rows: SqlRow[]): RetrieveChunk[] {
+  return rows.map((row) => ({
+    note_id: String(row.note_id),
+    title: String(row.title ?? ""),
+    space_id: String(row.space_id),
+    text: String(row.text ?? ""),
+    heading_path: row.heading_path,
+    block_id: row.block_uuid,
+    source_block_id: row.source_block_id,
+    embedding: parseEmbedding(row.embedding),
+  }));
+}
 
 export function loadChunksViaSql(run: SqlQuery): LoadChunks {
   return async (spaceId, queryText, opts) => {
@@ -150,7 +234,7 @@ export function loadChunksViaSql(run: SqlQuery): LoadChunks {
     const limit = opts?.limit ?? 40;
     const r = await run(
       `SELECT n.id AS note_id, n.title, n.space_id, ch.text, ch.heading_path,
-              b.id AS block_uuid, b.source_block_id
+              b.id AS block_uuid, b.source_block_id, ch.embedding
        FROM chunks ch
        INNER JOIN notes n ON n.id = ch.note_id AND n.deleted_at IS NULL
        LEFT JOIN blocks b ON b.id = ch.block_id
@@ -169,14 +253,30 @@ export function loadChunksViaSql(run: SqlQuery): LoadChunks {
        LIMIT $5`,
       [spaceId, like, tokens || "", hasNotes ? noteIds : null, limit],
     );
-    return (r.rows as unknown as SqlRow[]).map((row) => ({
-      note_id: String(row.note_id),
-      title: String(row.title ?? ""),
-      space_id: String(row.space_id),
-      text: String(row.text ?? ""),
-      heading_path: row.heading_path,
-      block_id: row.block_uuid,
-      source_block_id: row.source_block_id,
-    }));
+    return mapSqlRows(r.rows as SqlRow[]);
+  };
+}
+
+export function loadVectorChunksViaSql(run: SqlQuery): LoadVectorChunks {
+  return async (spaceId, queryEmbedding, opts) => {
+    const rawIds = opts?.noteIds ?? [];
+    const noteIds = rawIds.filter((id) => UUID_RE.test(id));
+    const hasNotes = noteIds.length > 0;
+    const limit = opts?.limit ?? 40;
+    const vec = formatVector(queryEmbedding);
+    const r = await run(
+      `SELECT n.id AS note_id, n.title, n.space_id, ch.text, ch.heading_path,
+              b.id AS block_uuid, b.source_block_id, ch.embedding
+       FROM chunks ch
+       INNER JOIN notes n ON n.id = ch.note_id AND n.deleted_at IS NULL
+       LEFT JOIN blocks b ON b.id = ch.block_id
+       WHERE n.space_id = $1 AND ch.space_id = $1
+         AND ch.embedding IS NOT NULL
+         AND ($3::uuid[] IS NULL OR n.id = ANY($3::uuid[]))
+       ORDER BY ch.embedding <=> $2::vector
+       LIMIT $4`,
+      [spaceId, vec, hasNotes ? noteIds : null, limit],
+    );
+    return mapSqlRows(r.rows as SqlRow[]);
   };
 }

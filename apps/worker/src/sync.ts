@@ -9,7 +9,8 @@ import {
   type ConnectionSecrets,
   type NormalizedNote,
 } from "@note-hub/core";
-import { createAdapter } from "@note-hub/adapters";
+import { createAdapter, decodeObjectKey, mapConnectionObjectKey, siyuanBoxConfRel } from "@note-hub/adapters";
+import { embedTexts, embeddingModelId, formatVector } from "@note-hub/retrieve";
 import { normalizeObsidianNote, normalizeSiyuanNote, normalizeNotionNote, normalizeFeishuNote, referencedAssetPaths } from "@note-hub/normalize";
 import { renderPreviewHtml } from "@note-hub/preview";
 import { sha256Hex } from "@note-hub/core";
@@ -74,17 +75,36 @@ async function upsertBlocks(noteId: string, note: NormalizedNote) {
 async function writeChunks(noteId: string, spaceId: string, note: NormalizedNote, blockIds: Map<string, string>) {
   await query("DELETE FROM chunks WHERE note_id = $1", [noteId]);
   let heading = "";
+  const inserted: { id: string; text: string }[] = [];
   for (const b of note.blocks) {
     if (b.type === "heading") heading = b.text;
     const text = b.text || b.markdown;
     if (!text.trim()) continue;
     const tokens = toFtsTokens(`${note.title} ${heading} ${text}`);
     const tokenCount = tokens.split(/\s+/).filter(Boolean).length;
-    await query(
+    const row = await query<{ id: string }>(
       `INSERT INTO chunks (note_id, space_id, block_id, heading_path, text, token_count, fts)
-       VALUES ($1,$2,$3,$4,$5,$6, to_tsvector('simple', $7))`,
+       VALUES ($1,$2,$3,$4,$5,$6, to_tsvector('simple', $7))
+       RETURNING id`,
       [noteId, spaceId, blockIds.get(b.source_block_id) ?? null, heading, text, tokenCount, tokens],
     );
+    if (row.rows[0]?.id) inserted.push({ id: row.rows[0].id, text });
+  }
+  if (!inserted.length) return;
+  try {
+    const vectors = await embedTexts(inserted.map((c) => c.text));
+    const model = embeddingModelId();
+    for (let i = 0; i < inserted.length; i++) {
+      const vec = vectors[i];
+      if (!vec?.length) continue;
+      await query(
+        `UPDATE chunks SET embedding = $2::vector, embedding_model = $3, updated_at = now() WHERE id = $1`,
+        [inserted[i].id, formatVector(vec), model],
+      );
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(JSON.stringify({ level: "error", message: "embed chunks failed", error: msg, note_id: noteId }));
   }
 }
 
@@ -238,7 +258,9 @@ async function isDeleted(id: string): Promise<boolean> {
   return Boolean(r.rows[0]?.deleted_at);
 }
 
-export async function runSync(connectionId: string): Promise<void> {
+export type RunSyncOpts = { keys?: string[] };
+
+export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Promise<void> {
   const r = await query("SELECT * FROM connections WHERE id = $1", [connectionId]);
   const conn = r.rows[0] as ConnectionRecord | undefined;
   if (!conn) throw new Error("connection not found");
@@ -285,6 +307,47 @@ export async function runSync(connectionId: string): Promise<void> {
         await log(null, null, "warn", probe.message ?? "encrypted_unreadable");
       }
       throw new Error(probe.message ?? "probe failed");
+    }
+
+    const fileKeys = (opts.keys ?? []).map(decodeObjectKey).filter(Boolean);
+    if (fileKeys.length) {
+      const tallies = { upserts: 0, deletes: 0, skipped: 0, failed: 0 };
+      const upsertedNotes: UpsertedNote[] = [];
+      await ingestFileKeys(conn, adapter, ctx, fileKeys, log, tallies, upsertedNotes);
+      upserts = tallies.upserts;
+      deletes = tallies.deletes;
+      skipped = tallies.skipped;
+      failed = tallies.failed;
+      await query(
+        "UPDATE connections SET last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now() WHERE id = $1",
+        [connectionId],
+      );
+      await query(
+        `UPDATE sync_run SET finished_at = now(), upserts = $2, deletes = $3, skipped = $4, failed = $5 WHERE id = $1`,
+        [runId, upserts, deletes, skipped, failed],
+      );
+      console.log(
+        JSON.stringify({
+          level: "info",
+          job_id: `syncfile-${connectionId}`,
+          connection_id: connectionId,
+          keys: fileKeys.length,
+          upserts,
+          deletes,
+          skipped,
+          failed,
+        }),
+      );
+      if (upsertedNotes.length) {
+        try {
+          await runPostSyncGrowth(conn.space_id, upsertedNotes);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(JSON.stringify({ level: "error", message: "post-sync growth failed", error: msg }));
+          await log(null, null, "warn", "post-sync growth: " + msg);
+        }
+      }
+      return;
     }
 
     const { changes, nextCursor } = await adapter.listChanges(ctx);
@@ -363,4 +426,111 @@ export async function runSync(connectionId: string): Promise<void> {
     if (isHubError(e)) return;
     throw e;
   }
+}
+
+
+async function siyuanBoxEncrypted(adapter: Adapter, ctx: AdapterContext, boxId: string): Promise<boolean> {
+  if (!boxId) return false;
+  try {
+    const bytes = await adapter.fetchAsset(ctx, siyuanBoxConfRel(boxId));
+    if (!bytes?.byteLength) return false;
+    const conf = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+    return conf.encrypted === true || conf.encrypted === "true";
+  } catch {
+    return false;
+  }
+}
+
+type Tallies = { upserts: number; deletes: number; skipped: number; failed: number };
+
+async function applyNote(
+  conn: ConnectionRecord,
+  adapter: Adapter,
+  ctx: AdapterContext,
+  sourceId: string,
+  path: string,
+  log: (sourceId: string | null, noteId: string | null, level: string, message: string) => Promise<void>,
+  tallies: Tallies,
+  upsertedNotes: UpsertedNote[],
+): Promise<void> {
+  try {
+    const result = await processNote(conn, adapter, ctx, sourceId, path);
+    if (result.status === "upsert") {
+      tallies.upserts++;
+      upsertedNotes.push(result.note);
+    } else if (result.status === "skip") tallies.skipped++;
+    else tallies.deletes++;
+  } catch (e) {
+    tallies.failed++;
+    await log(sourceId, null, "error", e instanceof Error ? e.message : String(e));
+  }
+}
+
+async function referringNotes(connectionId: string, assetPath: string): Promise<{ source_id: string; path: string }[]> {
+  const r = await query<{ source_id: string; path: string; markdown: string | null }>(
+    `SELECT source_id, path, markdown FROM notes WHERE connection_id = $1 AND deleted_at IS NULL`,
+    [connectionId],
+  );
+  const base = assetPath.split("/").pop() ?? assetPath;
+  const out: { source_id: string; path: string }[] = [];
+  for (const row of r.rows) {
+    const md = row.markdown ?? "";
+    if (md.includes(assetPath) || (base && md.includes(base)) || row.path === assetPath) {
+      out.push({ source_id: row.source_id, path: row.path });
+    }
+  }
+  const viaAssets = await query<{ source_id: string; path: string }>(
+    `SELECT n.source_id, n.path FROM notes n
+     INNER JOIN assets a ON a.note_id = n.id
+     WHERE n.connection_id = $1 AND n.deleted_at IS NULL AND a.source_path = $2`,
+    [connectionId, assetPath],
+  );
+  const seen = new Set(out.map((x) => x.source_id));
+  for (const row of viaAssets.rows) {
+    if (!seen.has(row.source_id)) out.push(row);
+  }
+  return out;
+}
+
+async function ingestFileKeys(
+  conn: ConnectionRecord,
+  adapter: Adapter,
+  baseCtx: AdapterContext,
+  keys: string[],
+  log: (sourceId: string | null, noteId: string | null, level: string, message: string) => Promise<void>,
+  tallies: Tallies,
+  upsertedNotes: UpsertedNote[],
+): Promise<void> {
+  for (const key of keys) {
+    const mapped = mapConnectionObjectKey(conn, key);
+    if (!mapped || mapped.kind === "skip") {
+      tallies.skipped++;
+      continue;
+    }
+    if (conn.source === "siyuan" && mapped.boxId) {
+      if (await siyuanBoxEncrypted(adapter, baseCtx, mapped.boxId)) {
+        tallies.skipped++;
+        await log(mapped.source_id, null, "warn", "encrypted notebook skipped");
+        continue;
+      }
+    }
+    const ctx: AdapterContext = { ...baseCtx, objectKey: mapped.objectKey };
+    if (mapped.kind === "asset") {
+      const refs = await referringNotes(conn.id, mapped.path);
+      if (!refs.length) {
+        tallies.skipped++;
+        continue;
+      }
+      for (const n of refs) {
+        await applyNote(conn, adapter, ctx, n.source_id, n.path, log, tallies, upsertedNotes);
+      }
+      continue;
+    }
+    await applyNote(conn, adapter, ctx, mapped.source_id, mapped.path, log, tallies, upsertedNotes);
+  }
+}
+
+export async function runSyncFiles(connectionId: string, keys: string[]): Promise<void> {
+  if (!keys.length) return;
+  await runSync(connectionId, { keys });
 }
