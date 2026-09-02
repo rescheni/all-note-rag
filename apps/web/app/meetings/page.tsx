@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
+import { IconCheck } from "../icons";
 
 type Meeting = {
   id: string;
@@ -73,7 +74,10 @@ export default function MeetingsPage() {
               {m.payload?.todos?.length ? (
                 <ul>
                   {m.payload.todos.map((t) => (
-                    <li key={t.text}>{t.done ? "☑" : "☐"} {t.text}</li>
+                    <li key={t.text} className="todo-row">
+                      <IconCheck done={Boolean(t.done)} />
+                      <span>{t.text}</span>
+                    </li>
                   ))}
                 </ul>
               ) : null}

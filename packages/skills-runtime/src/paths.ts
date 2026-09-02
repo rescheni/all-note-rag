@@ -1,5 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+export const NOTE_HUB_SKILL_CHILD = "NOTE_HUB_SKILL_CHILD";
 
 export function findRepoRoot(): string {
   if (process.env.NOTE_HUB_ROOT) return process.env.NOTE_HUB_ROOT;
@@ -36,3 +39,17 @@ export function listOfficialSkillDirs(repoRoot = findRepoRoot()): string[] {
 export function readSkillMd(dir: string): string {
   return readFileSync(join(dir, "SKILL.md"), "utf8");
 }
+
+export function helperPath(dir: string): string | null {
+  for (const f of ["skill.ts", "skill.js", "index.ts", "index.js"]) {
+    const p = join(dir, f);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+export function helperFileUrl(dir: string): string | null {
+  const p = helperPath(dir);
+  return p ? pathToFileURL(p).href : null;
+}
+

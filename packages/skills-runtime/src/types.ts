@@ -81,6 +81,8 @@ export type SkillRunInput = {
   hook: SkillHook;
   payload: Record<string, unknown>;
   host: HostApi;
+  /** Parent may pass this; never inferred from DB inside the child. */
+  space_kind?: "personal" | "team";
 };
 
 export type SkillRunResult = {

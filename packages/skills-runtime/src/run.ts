@@ -1,14 +1,11 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { growthWeeklyHandler } from "./growth-weekly.ts";
 import { meetingExtractHandler } from "./meeting-extract.ts";
 import { writingHealthHandler } from "./writing-health.ts";
 import { parseSkillMd } from "./parse.ts";
-import { officialSkillDir, readSkillMd } from "./paths.ts";
+import { NOTE_HUB_SKILL_CHILD, officialSkillDir, readSkillMd } from "./paths.ts";
 import type { SkillHandler, SkillManifest, SkillRunInput, SkillRunResult } from "./types.ts";
 
-const BUILTIN: Record<string, SkillHandler> = {
+export const BUILTIN: Record<string, SkillHandler> = {
   "growth-weekly": growthWeeklyHandler,
   "meeting-extract": meetingExtractHandler,
   "writing-health": writingHealthHandler,
@@ -45,7 +42,8 @@ export function loadOfficialSkill(name = "growth-weekly"): LoadedSkill {
   return loadSkillFromMarkdown(text, dir);
 }
 
-export async function runSkill(skill: LoadedSkill, input: SkillRunInput): Promise<SkillRunResult> {
+/** In-process test double. Production callers must use `runSkill` (child process). */
+export async function runSkillInProcess(skill: LoadedSkill, input: SkillRunInput): Promise<SkillRunResult> {
   if (!skill.manifest.hooks.includes(input.hook)) {
     return { ok: false, extra: { error: "hook_not_declared" } };
   }
@@ -53,24 +51,19 @@ export async function runSkill(skill: LoadedSkill, input: SkillRunInput): Promis
   return skill.handler({ ...input, payload });
 }
 
-export async function runOfficialHook(
-  name: string,
-  input: SkillRunInput,
-): Promise<SkillRunResult> {
+/**
+ * Run a skill in an isolated OS child (`apps/skill-runner`).
+ * Parent never executes skill handlers except when `NOTE_HUB_SKILL_CHILD=1` (inside the runner).
+ */
+export async function runSkill(skill: LoadedSkill, input: SkillRunInput): Promise<SkillRunResult> {
+  if (process.env[NOTE_HUB_SKILL_CHILD] === "1") {
+    return runSkillInProcess(skill, input);
+  }
+  const { runSkillIsolated } = await import("./isolate.ts");
+  return runSkillIsolated(skill, input);
+}
+
+export async function runOfficialHook(name: string, input: SkillRunInput): Promise<SkillRunResult> {
   const skill = loadOfficialSkill(name);
   return runSkill(skill, input);
-}
-
-/** Optional helper file is ignored when builtin exists. P1 does not spawn child processes. */
-export function helperPath(dir: string): string | null {
-  for (const f of ["skill.ts", "skill.js", "index.ts", "index.js"]) {
-    const p = join(dir, f);
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
-
-export function helperFileUrl(dir: string): string | null {
-  const p = helperPath(dir);
-  return p ? pathToFileURL(p).href : null;
 }

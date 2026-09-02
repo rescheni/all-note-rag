@@ -17,3 +17,20 @@ export const env = {
   webOrigin: req("WEB_ORIGIN", "http://127.0.0.1:3000"),
   vaultBucket: req("VAULT_BUCKET", "obsidian-src"),
 };
+
+const DEFAULT_NOTION_REDIRECT = "http://127.0.0.1:3000/v1/connections/oauth/notion/callback";
+
+export const notionOAuthEnv = {
+  get clientId() {
+    return process.env.NOTION_CLIENT_ID ?? "";
+  },
+  get clientSecret() {
+    return process.env.NOTION_CLIENT_SECRET ?? "";
+  },
+  get redirectUri() {
+    return process.env.NOTION_REDIRECT_URI || DEFAULT_NOTION_REDIRECT;
+  },
+  get configured() {
+    return Boolean(this.clientId && this.clientSecret);
+  },
+};

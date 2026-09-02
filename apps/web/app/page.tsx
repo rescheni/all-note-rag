@@ -1,16 +1,49 @@
 "use client";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
 import { loadSpaces, spaceKindLabel, storeSpaceId, type Space } from "@/lib/space";
 import { MembersPanel } from "./members-panel";
+import { isRunInProgress, SyncRunStatus, type SyncRunProgress } from "./sync-progress";
+import { Heatmap, type HeatDay } from "./heatmap";
 
-type Conn = { id: string; name: string; source: string; status: string; last_sync_at: string | null; last_error: string | null };
+type Conn = {
+  id: string;
+  name: string;
+  source: string;
+  status: string;
+  last_sync_at: string | null;
+  last_error: string | null;
+  config?: { endpoint?: string; bucket?: string; workspace_prefix?: string; kernel_base_url?: string };
+  latest_run?: SyncRunProgress | null;
+};
+
+const SOURCE_LABEL: Record<string, string> = {
+  obsidian: "Obsidian",
+  siyuan: "思源",
+  notion: "Notion",
+  feishu: "飞书",
+};
+
+function statusLabel(status: string) {
+  if (status === "active") return "正常";
+  if (status === "error") return "错误";
+  if (status === "paused") return "暂停";
+  if (status === "encrypted_unreadable") return "加密不可读";
+  return status;
+}
+
+function connMeta(c: Conn): string {
+  const bits = [SOURCE_LABEL[c.source] ?? c.source];
+  if (c.config?.endpoint) bits.push(c.config.endpoint);
+  if (c.config?.bucket) bits.push(c.config.bucket);
+  return bits.join(" · ");
+}
 type Note = { id: string; title: string; path: string; updated_at: string };
 
 const SOURCES = [
   { id: "obsidian", label: "Obsidian", hint: "明文 S3 前缀" },
-  { id: "siyuan", label: "思源", hint: "内核 API 或明文 data/" },
+  { id: "siyuan", label: "思源", hint: "内核 API、明文 data/ 或官方 S3 快照" },
   { id: "notion", label: "Notion", hint: "同步页面与数据库行" },
   { id: "feishu", label: "飞书", hint: "同步知识库 docx" },
 ] as const;
@@ -23,6 +56,10 @@ export default function HomePage() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [pollUntil, setPollUntil] = useState(0);
+  const [activity, setActivity] = useState<HeatDay[]>([]);
+  const pollUntilRef = useRef(0);
+  pollUntilRef.current = pollUntil;
 
   async function loadFor(sp: Space) {
     setSpace(sp);
@@ -31,6 +68,8 @@ export default function HomePage() {
     setConns(c.connections);
     const n = await api<{ notes: Note[] }>(`/v1/spaces/${sp.id}/notes`);
     setNotes(n.notes.slice(0, 8));
+    const act = await api<{ days: HeatDay[] }>(`/v1/spaces/${sp.id}/activity?days=365`).catch(() => ({ days: [] as HeatDay[] }));
+    setActivity(act.days ?? []);
   }
 
   async function boot() {
@@ -45,8 +84,50 @@ export default function HomePage() {
       location.href = "/login";
       return;
     }
+    try {
+      if (sessionStorage.getItem("hub_poll_sync")) {
+        sessionStorage.removeItem("hub_poll_sync");
+        const until = Date.now() + 120000;
+        pollUntilRef.current = until;
+        setPollUntil(until);
+      }
+    } catch {
+      /* ignore */
+    }
     boot().catch((e) => setErr(e instanceof Error ? e.message : "加载失败"));
   }, []);
+
+  const anyRunning = conns.some((c) => isRunInProgress(c.latest_run));
+
+  useEffect(() => {
+    if (!space?.id) return;
+    const spaceId = space.id;
+    let cancelled = false;
+    let timer = 0;
+    const tick = () => {
+      Promise.all([
+        api<{ connections: Conn[] }>(`/v1/spaces/${spaceId}/connections`),
+        api<{ days: HeatDay[] }>(`/v1/spaces/${spaceId}/activity?days=365`).catch(() => ({ days: [] as HeatDay[] })),
+      ])
+        .then(([c, act]) => {
+          if (cancelled) return;
+          setConns(c.connections);
+          setActivity(act.days ?? []);
+          const running = c.connections.some((x) => isRunInProgress(x.latest_run));
+          if (!running && Date.now() >= pollUntilRef.current) setPollUntil(0);
+          const delay = running || Date.now() < pollUntilRef.current ? 2000 : 8000;
+          timer = window.setTimeout(tick, delay);
+        })
+        .catch(() => {
+          if (!cancelled) timer = window.setTimeout(tick, 8000);
+        });
+    };
+    timer = window.setTimeout(tick, anyRunning || Date.now() < pollUntilRef.current ? 2000 : 8000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [space?.id, pollUntil, anyRunning]);
 
   async function onSwitch(id: string) {
     const next = spaces.find((s) => s.id === id);
@@ -89,7 +170,13 @@ export default function HomePage() {
     setErr("");
     try {
       await api(`/v1/connections/${id}/sync`, { method: "POST" });
-      alert("已入队同步");
+      const until = Date.now() + 120000;
+      pollUntilRef.current = until;
+      setPollUntil(until);
+      if (space) {
+        const c = await api<{ connections: Conn[] }>(`/v1/spaces/${space.id}/connections`);
+        setConns(c.connections);
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : "同步失败");
     }
@@ -103,7 +190,7 @@ export default function HomePage() {
       <p className="readonly-banner">中枢只读，不写回任何源。</p>
       {err && <p className="err">{err}</p>}
 
-      <div className="space-bar card">
+      <div className="space-bar">
         <div>
           <label htmlFor="space-switch">当前空间</label>
           <select
@@ -146,6 +233,8 @@ export default function HomePage() {
         </>
       )}
 
+      <Heatmap days={activity} />
+
       {canManageConn ? (
         <>
           <h2>接入一个源</h2>
@@ -161,25 +250,36 @@ export default function HomePage() {
       ) : (
         <p className="muted">你是只读成员，可以浏览笔记、搜索与问答，但不能管理连接或同步。</p>
       )}
-      <div className="row">
-        <div className="card grow">
+      <div className="home-split">
+        <section>
           <h2>连接</h2>
           {conns.length === 0 && <p className="muted">还没有连接，从上方选择一个源。</p>}
-          <ul className="list">
+          <div className="conn-list">
             {conns.map((c) => (
-              <li key={c.id}>
-                <strong>{c.name}</strong> <span className="muted">{c.source} · {c.status}</span>
-                <div className="muted">最近同步：{c.last_sync_at ? new Date(c.last_sync_at).toLocaleString() : "从未"}</div>
+              <article key={c.id} className="conn-card">
+                <div className="conn-card-head">
+                  <strong>{c.name}</strong>
+                  <span className={`status-pill ${isRunInProgress(c.latest_run) ? "status-syncing" : `status-${c.status}`}`}>
+                    {isRunInProgress(c.latest_run) ? "同步中" : statusLabel(c.status)}
+                  </span>
+                </div>
+                <div className="meta">{connMeta(c)}</div>
+                <div className="meta">最近同步：{c.last_sync_at ? new Date(c.last_sync_at).toLocaleString() : "从未"}</div>
+                <SyncRunStatus run={c.latest_run} />
                 {c.last_error && <div className="err">{c.last_error}</div>}
                 {canManageConn && (
-                  <button type="button" className="secondary" onClick={() => triggerSync(c.id)}>立即同步</button>
+                  <div className="conn-actions">
+                    <Link href={`/connections/${c.id}`}>编辑</Link>
+                    <button type="button" className="secondary" onClick={() => triggerSync(c.id)}>立即同步</button>
+                  </div>
                 )}
-              </li>
+              </article>
             ))}
-          </ul>
-        </div>
-        <div className="card grow">
+          </div>
+        </section>
+        <section>
           <h2>最近笔记</h2>
+          {notes.length === 0 && <p className="muted">同步后会出现最近改动的笔记。</p>}
           <ul className="list">
             {notes.map((n) => (
               <li key={n.id}>
@@ -189,7 +289,7 @@ export default function HomePage() {
             ))}
           </ul>
           <p><Link href="/notes">全部笔记</Link></p>
-        </div>
+        </section>
       </div>
     </>
   );

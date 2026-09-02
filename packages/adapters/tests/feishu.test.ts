@@ -149,3 +149,108 @@ describe("feishu adapter", () => {
     expect(changes).toEqual([]);
   });
 });
+
+
+describe("feishu file nodes", () => {
+  it("lists wiki file type as a change", async () => {
+    const fetchFn: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.includes("tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "t-xxx" }), { status: 200 });
+      }
+      if (url.includes("/wiki/v2/spaces/") && url.includes("/nodes")) {
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            data: {
+              items: [
+                {
+                  node_token: "n-file",
+                  obj_token: "fileTOKEN",
+                  obj_type: "file",
+                  title: "invoice.pdf",
+                  has_child: false,
+                  obj_edit_time: "9",
+                },
+                {
+                  node_token: "n-sheet",
+                  obj_token: "shtSKIP",
+                  obj_type: "sheet",
+                  title: "Sheet",
+                  has_child: false,
+                  obj_edit_time: "9",
+                },
+              ],
+              has_more: false,
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected url ${url} ${init?.method}`);
+    };
+    const adapter = new FeishuAdapter(fetchFn);
+    const { changes } = await adapter.listChanges(ctx());
+    expect(changes.some((c) => c.source_id === "fileTOKEN" && c.path?.includes("invoice.pdf"))).toBe(true);
+    expect(changes.some((c) => c.source_id === "shtSKIP")).toBe(false);
+  });
+});
+
+describe("feishu listContacts", () => {
+  it("walks departments and dedupes users; skips no-email at parse if resigned", async () => {
+    const fetchFn: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.includes("tenant_access_token/internal")) {
+        return new Response(JSON.stringify({ code: 0, tenant_access_token: "t-xxx" }), { status: 200 });
+      }
+      const h = new Headers(init?.headers);
+      expect(h.get("authorization")).toBe("Bearer t-xxx");
+      if (url.includes("/contact/v3/departments/0/children")) {
+        return new Response(
+          JSON.stringify({
+            code: 0,
+            data: {
+              items: [{ open_department_id: "od-eng", name: "研发" }],
+              has_more: false,
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/contact/v3/scopes")) {
+        return new Response(
+          JSON.stringify({ code: 0, data: { department_ids: ["od-eng"], user_ids: [], has_more: false } }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/contact/v3/users/find_by_department")) {
+        const u = new URL(url);
+        const dept = u.searchParams.get("department_id");
+        const items =
+          dept === "0"
+            ? [
+                {
+                  open_id: "ou_root",
+                  email: "owner@ex.com",
+                  name: "主",
+                },
+              ]
+            : [
+                { open_id: "ou_match", email: "Match@Ex.com", name: "配" },
+                { open_id: "ou_root", email: "owner@ex.com", name: "主" },
+                { open_id: "ou_none", name: "无邮箱" },
+                { open_id: "ou_gone", email: "gone@ex.com", status: { is_resigned: true } },
+              ];
+        return new Response(JSON.stringify({ code: 0, data: { items, has_more: false } }), { status: 200 });
+      }
+      throw new Error(`unexpected url ${url}`);
+    };
+    const adapter = new FeishuAdapter(fetchFn);
+    const people = await adapter.listContacts(ctx());
+    const ids = people.map((p) => p.open_id).sort();
+    expect(ids).toEqual(["ou_match", "ou_none", "ou_root"]);
+    expect(people.find((p) => p.open_id === "ou_match")?.email).toBe("match@ex.com");
+    expect(people.find((p) => p.open_id === "ou_none")?.email).toBeNull();
+    expect(people.some((p) => p.open_id === "ou_gone")).toBe(false);
+  });
+});

@@ -4,7 +4,6 @@ import {
   createPgHostApi,
   ensureSkillOnSpace,
   growthAccessError,
-  isSkillEnabled,
   lastSevenDayRange,
   runOfficialHook,
   type GrowthKind,
@@ -51,23 +50,13 @@ growthRoutes.get("/spaces/:id/growth/report", async (c) => {
   const from = c.req.query("from") || range.from;
   const to = c.req.query("to") || range.to;
   const host = createPgHostApi({ query, spaceId, userId: user.id });
-  const enabled = await isSkillEnabled(query, spaceId, "growth-weekly");
-  const result = enabled
-    ? await runOfficialHook("growth-weekly", {
-        space_id: spaceId,
-        hook: "weekly-report",
-        payload: { from, to },
-        host,
-      })
-    : await (async () => {
-        const { growthWeeklyHandler } = await import("@note-hub/skills-runtime");
-        return growthWeeklyHandler({
-          space_id: spaceId,
-          hook: "weekly-report",
-          payload: { from, to },
-          host,
-        });
-      })();
+  const result = await runOfficialHook("growth-weekly", {
+    space_id: spaceId,
+    space_kind: "personal",
+    hook: "weekly-report",
+    payload: { from, to },
+    host,
+  });
   const latest = await query(
     `SELECT id, space_id, range_from, range_to, markdown, created_at
      FROM growth_reports WHERE space_id = $1 ORDER BY created_at DESC LIMIT 1`,

@@ -8,16 +8,20 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@note-hub/core": "workspace:*",
+    "@aws-sdk/client-s3": "^3.758.0",
     "@note-hub/adapters": "workspace:*",
+    "@note-hub/core": "workspace:*",
     "@note-hub/normalize": "workspace:*",
     "@note-hub/preview": "workspace:*",
+    "@note-hub/retrieve": "workspace:*",
     "@note-hub/skills-runtime": "workspace:*",
-    "@aws-sdk/client-s3": "^3.758.0",
     "bullmq": "^5.52.2",
     "ioredis": "^5.6.1",
+    "mammoth": "^1.12.2",
     "pg": "^8.14.1",
-    "@note-hub/retrieve": "workspace:*"
+    "tesseract.js": "^7.0.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/chi_sim": "^1.0.0"
   },
   "devDependencies": {
     "@types/pg": "^8.11.11",

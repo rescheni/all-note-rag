@@ -6,7 +6,6 @@ import {
   type ConnectionStatus,
   type SourceKind,
 } from "./types.ts";
-import { SIYUAN_OFFICIAL_S3_CODE, SIYUAN_OFFICIAL_S3_MESSAGE } from "./errors.ts";
 
 export type ConnectionInput = {
   source?: string;
@@ -44,20 +43,41 @@ function asStringArray(v: unknown): string[] | undefined {
   return undefined;
 }
 
-function pickSecrets(raw: Record<string, unknown> | undefined): ConnectionSecrets {
+export function pickSecrets(raw: Record<string, unknown> | undefined): ConnectionSecrets {
   const s: ConnectionSecrets = {};
   if (!raw) return s;
   const access_key = asString(raw.access_key);
   const secret_key = asString(raw.secret_key);
   const token = asString(raw.token);
+  const access_token = asString(raw.access_token);
+  const refresh_token = asString(raw.refresh_token);
   const app_id = asString(raw.app_id);
   const app_secret = asString(raw.app_secret);
+  const repo_password = asString(raw.repo_password) || asString(raw.repo_key) || asString(raw.passphrase);
   if (access_key) s.access_key = access_key;
   if (secret_key) s.secret_key = secret_key;
   if (token) s.token = token;
+  if (access_token) s.access_token = access_token;
+  if (refresh_token) s.refresh_token = refresh_token;
   if (app_id) s.app_id = app_id;
   if (app_secret) s.app_secret = app_secret;
+  if (repo_password) s.repo_password = repo_password;
   return s;
+}
+
+export function secretsHavePayload(s: ConnectionSecrets): boolean {
+  return Boolean(
+    s.access_key || s.secret_key || s.token || s.access_token || s.refresh_token || s.app_id || s.app_secret || s.repo_password,
+  );
+}
+
+/** Incoming blank/whitespace secret fields are ignored so an edit form cannot wipe stored keys. */
+export function mergeConnectionSecrets(
+  existing: ConnectionSecrets | null | undefined,
+  incoming: Record<string, unknown> | ConnectionSecrets | undefined,
+): ConnectionSecrets {
+  const picked = pickSecrets((incoming ?? {}) as Record<string, unknown>);
+  return { ...(existing ?? {}), ...picked };
 }
 
 /** True when a posix-like prefix has a path segment exactly equal to `repo`. */
@@ -84,8 +104,13 @@ export function validateConnectionInput(body: unknown): ValidateResult {
   delete cfgIn.access_key;
   delete cfgIn.secret_key;
   delete cfgIn.token;
+  delete cfgIn.access_token;
+  delete cfgIn.refresh_token;
   delete cfgIn.app_id;
   delete cfgIn.app_secret;
+  delete cfgIn.repo_password;
+  delete cfgIn.repo_key;
+  delete cfgIn.passphrase;
   const secrets = pickSecrets(input.secrets);
 
   if (source === "obsidian") {
@@ -126,10 +151,8 @@ export function validateConnectionInput(body: unknown): ValidateResult {
     const official = asBool(cfgIn.official_s3);
     const workspace_prefix = asString(cfgIn.workspace_prefix);
     const remote_prefix = asString(cfgIn.remote_prefix);
-    if (official || prefixHasRepoSegment(workspace_prefix) || prefixHasRepoSegment(remote_prefix)) {
-      return fail(SIYUAN_OFFICIAL_S3_CODE, SIYUAN_OFFICIAL_S3_MESSAGE);
-    }
     const config: ConnectionConfig = { mode: modeRaw };
+    if (official) config.official_s3 = true;
     if (modeRaw === "api") {
       config.kernel_base_url = asString(cfgIn.kernel_base_url) || "http://127.0.0.1:6806";
       const nbs = asStringArray(cfgIn.notebook_ids);
@@ -144,6 +167,7 @@ export function validateConnectionInput(body: unknown): ValidateResult {
       config.force_path_style = cfgIn.force_path_style === false ? false : true;
       const endpoint = asString(cfgIn.endpoint);
       if (endpoint) config.endpoint = endpoint;
+      if (remote_prefix) config.remote_prefix = remote_prefix;
     }
     return {
       ok: true,
@@ -160,7 +184,9 @@ export function validateConnectionInput(body: unknown): ValidateResult {
 
   if (source === "notion") {
     if (!name) return fail("invalid_request", "缺少名称");
-    if (!secrets.token) return fail("invalid_request", "缺少 Notion token");
+    if (!secrets.token && !secrets.access_token) {
+      return fail("invalid_request", "缺少 Notion 授权：请用 Notion 登录或填写 Integration Token");
+    }
     const config: ConnectionConfig = {};
     const workspace_id = asString(cfgIn.workspace_id);
     if (workspace_id) config.workspace_id = workspace_id;

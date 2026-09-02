@@ -12,7 +12,9 @@ import {
   isSkillEnabled,
   runOfficialHook,
 } from "@note-hub/skills-runtime";
+import { loadAiSettings } from "@note-hub/core";
 import { query } from "../db.ts";
+import { env } from "../env.ts";
 import { errors } from "../errors.ts";
 import { requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
 
@@ -24,12 +26,10 @@ const loadChunks = loadChunksViaSql((text, params) => query(text, params));
 const loadVectorChunks = loadVectorChunksViaSql((text, params) => query(text, params));
 
 
-function chatConfig() {
-  const baseUrl = process.env.OPENAI_BASE_URL?.trim();
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  const model = process.env.CHAT_MODEL?.trim() || "gpt-4o-mini";
-  if (!baseUrl || !apiKey) return undefined;
-  return { baseUrl, apiKey, model };
+async function chatConfig() {
+  const ai = await loadAiSettings(query, env.hubSecret);
+  if (!ai.configured) return undefined;
+  return { baseUrl: ai.base_url, apiKey: ai.api_key, model: ai.chat_model };
 }
 
 async function growthOnAsk(spaceId: string, userId: string, q: string): Promise<string | undefined> {
@@ -40,6 +40,7 @@ async function growthOnAsk(spaceId: string, userId: string, q: string): Promise<
     const host = createPgHostApi({ query, spaceId, userId });
     const result = await runOfficialHook("growth-weekly", {
       space_id: spaceId,
+      space_kind: "personal",
       hook: "on-ask",
       payload: { query: q },
       host,
@@ -55,8 +56,10 @@ async function writingHealthOnAsk(spaceId: string, userId: string, q: string): P
   try {
     if (!(await isSkillEnabled(query, spaceId, "writing-health"))) return undefined;
     const host = createPgHostApi({ query, spaceId, userId });
+    const kindRow = await query<{ kind: string }>("SELECT kind FROM spaces WHERE id = $1", [spaceId]);
     const result = await runOfficialHook("writing-health", {
       space_id: spaceId,
+      space_kind: kindRow.rows[0]?.kind === "team" ? "team" : "personal",
       hook: "on-ask",
       payload: { query: q },
       host,
@@ -89,21 +92,33 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
   let queryEmbedding: number[] | undefined;
   if (q.trim()) {
     try {
-      const [emb] = await embedTexts([q]);
+      const ai = await loadAiSettings(query, env.hubSecret);
+      const [emb] = await embedTexts([q], {
+        baseUrl: ai.base_url,
+        apiKey: ai.api_key,
+        model: ai.embedding_model,
+      });
       queryEmbedding = emb;
     } catch (e) {
       console.error(JSON.stringify({ level: "error", message: "embed query failed", error: String(e) }));
     }
   }
   const [retrieved, growthSummary, writingSummary] = await Promise.all([
-    hybridRetrieve(spaceId, q, { noteIds, loadChunks, loadVectorChunks, queryEmbedding }),
+    hybridRetrieve(spaceId, q, {
+      noteIds,
+      loadChunks,
+      loadVectorChunks,
+      queryEmbedding,
+      userId: user.id,
+      role: gate.mem.role,
+    }),
     growthOnAsk(spaceId, user.id, q),
     writingHealthOnAsk(spaceId, user.id, q),
   ]);
   if (retrieved.unknown) {
     return c.json({ unknown: true, answer_markdown: UNKNOWN_ANSWER, citations: [] });
   }
-  const answer = await composeAskAnswer(q, retrieved.hits, chatConfig());
+  const answer = await composeAskAnswer(q, retrieved.hits, await chatConfig());
   if (answer.unknown) {
     return c.json({ unknown: true, answer_markdown: UNKNOWN_ANSWER, citations: [] });
   }

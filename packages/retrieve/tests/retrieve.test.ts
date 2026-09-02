@@ -377,3 +377,40 @@ describe("searchSourcesAndSimilar", () => {
     expect(hits.map((h) => h.note_id)).toEqual(["n-similar"]);
   });
 });
+
+
+describe("embedTexts settings endpoint", () => {
+  it("uses runtime baseUrl+apiKey even when env is empty", async () => {
+    const prevB = process.env.OPENAI_BASE_URL;
+    const prevK = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_BASE_URL;
+    delete process.env.OPENAI_API_KEY;
+    let hit = "";
+    let auth = "";
+    const fake: typeof fetch = async (input, init) => {
+      hit = String(input);
+      auth = new Headers(init?.headers).get("authorization") ?? "";
+      const emb = new Array(EMBEDDING_DIM).fill(0.01);
+      return new Response(JSON.stringify({ data: [{ embedding: emb, index: 0 }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      const [v] = await embedTexts(["hello"], {
+        baseUrl: "https://gateway.example/v1",
+        apiKey: "sk-from-settings",
+        model: "text-embedding-3-small",
+        fetch: fake,
+      });
+      expect(hit).toBe("https://gateway.example/v1/embeddings");
+      expect(auth).toBe("Bearer sk-from-settings");
+      expect(v).toHaveLength(EMBEDDING_DIM);
+    } finally {
+      if (prevB === undefined) delete process.env.OPENAI_BASE_URL;
+      else process.env.OPENAI_BASE_URL = prevB;
+      if (prevK === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = prevK;
+    }
+  });
+});

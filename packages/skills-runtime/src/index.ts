@@ -10,3 +10,4 @@ export * from "./run.ts";
 export * from "./catalog.ts";
 export * from "./meeting-extract.ts";
 export * from "./writing-health.ts";
+export * from "./isolate.ts";

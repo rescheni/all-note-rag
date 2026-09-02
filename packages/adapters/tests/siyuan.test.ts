@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { HubError, isHubError, SIYUAN_OFFICIAL_S3_CODE, type AdapterContext } from "@note-hub/core";
+import { HubError, isHubError, SIYUAN_REPO_PASSWORD_REQUIRED_CODE, type AdapterContext } from "@note-hub/core";
 import { memoryStore, SiYuanAdapter } from "../src/siyuan.ts";
 
 const fixtureRoot = join(fileURLToPath(new URL("../../../fixtures/siyuan-data", import.meta.url)));
@@ -52,6 +52,27 @@ describe("siyuan mode B memoryStore", () => {
     expect(changes.every((c) => c.type === "upsert")).toBe(true);
   });
 
+  it("empty workspace prefix still rejects bucket-level official repo", async () => {
+    const adapter = new SiYuanAdapter({
+      store: memoryStore({
+        "repo/indexes-v2.json": "{}",
+        "repo/indexes/abc": "chunk",
+      }),
+    });
+    const c = ctx({
+      mode: "workspace",
+      config: { bucket: "siyuan", workspace_prefix: "workspace" },
+    });
+    const probe = await adapter.probe(c);
+    expect(probe.ok).toBe(false);
+    expect(probe.code).toBe(SIYUAN_REPO_PASSWORD_REQUIRED_CODE);
+    await expect(adapter.listChanges(c)).rejects.toSatisfy((e: unknown) => {
+      expect(isHubError(e) || e instanceof HubError).toBe(true);
+      expect((e as HubError).code).toBe(SIYUAN_REPO_PASSWORD_REQUIRED_CODE);
+      return true;
+    });
+  });
+
   it("official-repo is rejected", async () => {
     const files = walkFiles(fixtureRoot);
     const adapter = new SiYuanAdapter({ store: memoryStore(files) });
@@ -61,10 +82,10 @@ describe("siyuan mode B memoryStore", () => {
     });
     const probe = await adapter.probe(c);
     expect(probe.ok).toBe(false);
-    expect(probe.code).toBe(SIYUAN_OFFICIAL_S3_CODE);
+    expect(probe.code).toBe(SIYUAN_REPO_PASSWORD_REQUIRED_CODE);
     await expect(adapter.listChanges(c)).rejects.toSatisfy((e: unknown) => {
       expect(isHubError(e) || e instanceof HubError).toBe(true);
-      expect((e as HubError).code).toBe(SIYUAN_OFFICIAL_S3_CODE);
+      expect((e as HubError).code).toBe(SIYUAN_REPO_PASSWORD_REQUIRED_CODE);
       return true;
     });
   });

@@ -152,3 +152,68 @@ describe("notion adapter", () => {
     expect(md).toContain("A paragraph of content");
   });
 });
+
+describe("notion adapter oauth token", () => {
+  it("prefers oauth access_token over integration token", async () => {
+    const seen: string[] = [];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      seen.push(new Headers(init?.headers).get("authorization") ?? "");
+      return new Response(JSON.stringify({ object: "user", id: "u1" }), { status: 200 });
+    };
+    const adapter = new NotionAdapter(fetchFn);
+    const c = ctx();
+    c.secrets = { token: "secret-token", access_token: "oauth-access" };
+    const ok = await adapter.probe(c);
+    expect(ok.ok).toBe(true);
+    expect(seen).toEqual(["Bearer oauth-access"]);
+  });
+
+  it("token-only still works", async () => {
+    const adapter = new NotionAdapter(mockFetch());
+    const ok = await adapter.probe(ctx());
+    expect(ok.ok).toBe(true);
+  });
+
+  it("refreshes on 401 when refresh_token exists", async () => {
+    const calls: { url: string; auth: string }[] = [];
+    let users = 0;
+    const fetchFn: typeof fetch = async (input, init) => {
+      const url = String(input);
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      calls.push({ url, auth });
+      if (url.includes("/oauth/token")) {
+        expect(auth.startsWith("Basic ")).toBe(true);
+        const body = JSON.parse(String(init?.body ?? "{}")) as { grant_type?: string };
+        expect(body.grant_type).toBe("refresh_token");
+        return new Response(JSON.stringify({ access_token: "oauth-rotated", refresh_token: "refresh-2" }), {
+          status: 200,
+        });
+      }
+      if (url.endsWith("/v1/users/me")) {
+        users += 1;
+        if (auth === "Bearer stale-oauth") {
+          return new Response("unauthorized", { status: 401 });
+        }
+        if (auth === "Bearer oauth-rotated") {
+          return new Response(JSON.stringify({ object: "user", id: "u1" }), { status: 200 });
+        }
+      }
+      throw new Error(`unexpected ${url} ${auth}`);
+    };
+    const persisted: Record<string, string>[] = [];
+    const adapter = new NotionAdapter(fetchFn, { clientId: "cid", clientSecret: "csecret" });
+    const c = ctx();
+    c.secrets = { token: "secret-token", access_token: "stale-oauth", refresh_token: "refresh-1" };
+    c.persistSecrets = async (s) => {
+      persisted.push({ ...(s as Record<string, string>) });
+    };
+    const ok = await adapter.probe(c);
+    expect(ok.ok).toBe(true);
+    expect(users).toBe(2);
+    expect(c.secrets?.access_token).toBe("oauth-rotated");
+    expect(persisted[0]?.access_token).toBe("oauth-rotated");
+    expect(JSON.stringify(ok)).not.toContain("stale-oauth");
+    expect(JSON.stringify(ok)).not.toContain("csecret");
+    expect(JSON.stringify(calls.map((x) => x.auth))).not.toContain("csecret");
+  });
+});

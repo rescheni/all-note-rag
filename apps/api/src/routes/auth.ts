@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { ensureSkillOnSpace } from "@note-hub/skills-runtime";
 import { query, withTx } from "../db.ts";
 import { errors, jsonError } from "../errors.ts";
-import { hashPassword, requireUser, setSessionCookie, signToken, verifyPassword, type AuthUser } from "../auth.ts";
+import { clearSessionCookie, hashPassword, requireUser, setSessionCookie, signToken, verifyPassword, type AuthUser } from "../auth.ts";
 
 type Vars = { user: AuthUser };
 
@@ -78,6 +78,6 @@ authRoutes.get("/me", requireUser, async (c) => {
 });
 
 authRoutes.post("/auth/logout", async (c) => {
-  c.header("Set-Cookie", "hub_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+  clearSessionCookie(c);
   return c.json({ ok: true });
 });

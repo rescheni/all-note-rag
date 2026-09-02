@@ -60,7 +60,10 @@ function readToken(c: Context): string | null {
   if (auth?.toLowerCase().startsWith("bearer ")) return auth.slice(7).trim();
   const cookie = c.req.header("cookie") ?? "";
   const m = /(?:^|;\s*)hub_session=([^;]+)/.exec(cookie);
-  return m ? decodeURIComponent(m[1]) : null;
+  if (m) return decodeURIComponent(m[1]);
+  // Alternative for <img> on GET /assets. Never log this value.
+  const q = c.req.query("token");
+  return q?.trim() || null;
 }
 
 export async function requireUser(c: Context, next: Next) {
@@ -78,11 +81,32 @@ export async function requireUser(c: Context, next: Next) {
   await next();
 }
 
+function requestIsHttps(c: Context): boolean {
+  const xf = (c.req.header("x-forwarded-proto") ?? "").split(",")[0].trim().toLowerCase();
+  if (xf === "https") return true;
+  try {
+    if (new URL(c.req.url).protocol === "https:") return true;
+  } catch {
+    /* ignore */
+  }
+  const origin = c.req.header("origin") ?? "";
+  if (origin.toLowerCase().startsWith("https://")) return true;
+  const referer = c.req.header("referer") ?? "";
+  return referer.toLowerCase().startsWith("https://");
+}
+
+function sessionCookieFlags(c: Context, maxAge: number): string {
+  const parts = ["Path=/", "HttpOnly", "SameSite=Lax", `Max-Age=${maxAge}`];
+  if (requestIsHttps(c)) parts.push("Secure");
+  return parts.join("; ");
+}
+
 export function setSessionCookie(c: Context, token: string) {
-  c.header(
-    "Set-Cookie",
-    `hub_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 7}`,
-  );
+  c.header("Set-Cookie", `hub_session=${encodeURIComponent(token)}; ${sessionCookieFlags(c, 60 * 60 * 24 * 7)}`);
+}
+
+export function clearSessionCookie(c: Context) {
+  c.header("Set-Cookie", `hub_session=; ${sessionCookieFlags(c, 0)}`);
 }
 
 export type SpaceRole = "owner" | "editor" | "viewer";

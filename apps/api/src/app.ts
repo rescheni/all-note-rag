@@ -9,13 +9,18 @@ import { askRoutes } from "./routes/ask.ts";
 import { growthRoutes } from "./routes/growth.ts";
 import { skillRoutes } from "./routes/skills.ts";
 import { hookRoutes } from "./routes/hooks.ts";
+import { oauthRoutes } from "./routes/oauth.ts";
+import { settingsRoutes } from "./routes/settings.ts";
 import { jsonError } from "./errors.ts";
 
 export const app = new Hono();
 app.use(
   "*",
   cors({
-    origin: [env.webOrigin, "http://localhost:3000", "http://127.0.0.1:3000"],
+    origin: (origin) => {
+      if (!origin) return env.webOrigin;
+      return origin;
+    },
     credentials: true,
     allowHeaders: ["Content-Type", "Authorization", "x-hub-secret"],
     allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
@@ -31,6 +36,8 @@ app.get("/health", (c) => c.json({ ok: true }));
 
 // Webhook is unauthenticated (shared HUB_SECRET). Mount before /v1 sub-apps that use("*", requireUser).
 app.route("/v1", hookRoutes);
+// Notion OAuth callback is a browser redirect (signed state); authorize/status still requireUser.
+app.route("/v1", oauthRoutes);
 
 const v1 = new Hono();
 v1.route("/", authRoutes);
@@ -40,6 +47,7 @@ v1.route("/", noteRoutes);
 v1.route("/", askRoutes);
 v1.route("/", growthRoutes);
 v1.route("/", skillRoutes);
+v1.route("/", settingsRoutes);
 app.route("/v1", v1);
 
 app.notFound((c) => jsonError(c, 404, "not_found", "未找到"));

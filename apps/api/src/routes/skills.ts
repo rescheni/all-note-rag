@@ -78,9 +78,10 @@ skillRoutes.get("/spaces/:id/meetings", async (c) => {
             n.title AS note_title, n.path AS note_path
      FROM skill_artifacts a
      LEFT JOIN notes n ON n.id = a.note_id
+       AND note_visible_to(n.acl_snapshot, $2::uuid, $3::text)
      WHERE a.space_id = $1 AND a.kind = 'meeting'
      ORDER BY a.created_at DESC LIMIT 200`,
-    [spaceId],
+    [spaceId, user.id, gate.mem.role],
   );
   return c.json({ meetings: r.rows });
 });
@@ -93,9 +94,11 @@ skillRoutes.get("/spaces/:id/writing-health", async (c) => {
   if (denied) return denied;
   const enabled = await isSkillEnabled(query, spaceId, "writing-health");
   if (!enabled) return errors.notFound(c, "尚未启用 writing-health");
+  const kindRow = await query<{ kind: string }>("SELECT kind FROM spaces WHERE id = $1", [spaceId]);
   const host = createPgHostApi({ query, spaceId, userId: user.id });
   const result = await runOfficialHook("writing-health", {
     space_id: spaceId,
+    space_kind: kindRow.rows[0]?.kind === "team" ? "team" : "personal",
     hook: "weekly-report",
     payload: {},
     host,

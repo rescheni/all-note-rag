@@ -4,9 +4,17 @@ export const EMBEDDING_DIM = 1536;
 export const LOCAL_EMBEDDING_MODEL = "local-hash-ngram-1536";
 export const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
 
-export function embeddingModelId(): string {
-  if (process.env.OPENAI_BASE_URL?.trim() && process.env.OPENAI_API_KEY?.trim()) {
-    return process.env.EMBEDDING_MODEL?.trim() || DEFAULT_EMBEDDING_MODEL;
+export type EmbedEndpoint = {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+};
+
+export function embeddingModelId(opts?: EmbedEndpoint): string {
+  const base = opts?.baseUrl?.trim() || process.env.OPENAI_BASE_URL?.trim();
+  const key = opts?.apiKey?.trim() || process.env.OPENAI_API_KEY?.trim();
+  if (base && key) {
+    return opts?.model?.trim() || process.env.EMBEDDING_MODEL?.trim() || DEFAULT_EMBEDDING_MODEL;
   }
   return LOCAL_EMBEDDING_MODEL;
 }
@@ -110,16 +118,24 @@ export function parseEmbedding(raw: unknown): number[] | undefined {
   return undefined;
 }
 
-export type EmbedTextsOpts = {
+export type EmbedTextsOpts = EmbedEndpoint & {
   fetch?: typeof fetch;
   /** Force the local projector (tests; never hits network). */
   local?: boolean;
 };
 
+function resolvedEndpoint(opts?: EmbedTextsOpts): { base: string; apiKey: string; model: string } | null {
+  const base = (opts?.baseUrl?.trim() || process.env.OPENAI_BASE_URL?.trim() || "").replace(/\/$/, "");
+  const apiKey = opts?.apiKey?.trim() || process.env.OPENAI_API_KEY?.trim() || "";
+  if (!base || !apiKey) return null;
+  const model = opts?.model?.trim() || process.env.EMBEDDING_MODEL?.trim() || DEFAULT_EMBEDDING_MODEL;
+  return { base, apiKey, model };
+}
+
 async function embedOpenAI(texts: string[], opts?: EmbedTextsOpts): Promise<number[][]> {
-  const base = process.env.OPENAI_BASE_URL!.trim().replace(/\/$/, "");
-  const apiKey = process.env.OPENAI_API_KEY!.trim();
-  const model = process.env.EMBEDDING_MODEL?.trim() || DEFAULT_EMBEDDING_MODEL;
+  const ep = resolvedEndpoint(opts);
+  if (!ep) throw new Error("embeddings not configured");
+  const { base, apiKey, model } = ep;
   const url = `${base}/embeddings`;
   const res = await (opts?.fetch ?? fetch)(url, {
     method: "POST",
@@ -150,8 +166,7 @@ async function embedOpenAI(texts: string[], opts?: EmbedTextsOpts): Promise<numb
 
 export async function embedTexts(texts: string[], opts?: EmbedTextsOpts): Promise<number[][]> {
   if (!texts.length) return [];
-  const useOpenAI =
-    !opts?.local && Boolean(process.env.OPENAI_BASE_URL?.trim() && process.env.OPENAI_API_KEY?.trim());
+  const useOpenAI = !opts?.local && Boolean(resolvedEndpoint(opts));
   if (useOpenAI) {
     try {
       return await embedOpenAI(texts, opts);

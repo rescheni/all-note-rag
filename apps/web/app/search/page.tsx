@@ -55,7 +55,7 @@ export default function SearchPage() {
       <h1>搜索</h1>
       <p className="readonly-banner">中枢只读，不写回任何源。</p>
       {space && <p className="muted">当前空间：{space.name}（{spaceKindLabel(space.kind)}）</p>}
-      <form className="search-bar card" onSubmit={onSubmit}>
+      <form className="search-bar" onSubmit={onSubmit}>
         <input name="q" type="text" placeholder="搜索笔记正文…" />
         <button type="submit" disabled={!space}>搜索</button>
       </form>
@@ -63,7 +63,7 @@ export default function SearchPage() {
       {didSearch && (
         <>
           <h2>源文件</h2>
-          <ul className="list card">
+          <ul className="list">
             {results.length === 0 && <li className="muted">无源文件命中</li>}
             {results.map((h) => (
               <li key={h.note_id + (h.source_block_id ?? "")}>
@@ -74,7 +74,7 @@ export default function SearchPage() {
             ))}
           </ul>
           <h2>相似文件</h2>
-          <ul className="list card">
+          <ul className="list">
             {similar.length === 0 && <li className="muted">无相似文件</li>}
             {similar.map((h) => (
               <li key={h.note_id}>

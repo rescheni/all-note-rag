@@ -1,6 +1,26 @@
+name: note-hub
+
+x-app-env: &app-env
+  DATABASE_URL: postgres://notehub:notehub@postgres:5432/notehub
+  REDIS_URL: redis://redis:6379
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: us-east-1
+  S3_BUCKET: hub-dev
+  S3_ACCESS_KEY: minioadmin
+  S3_SECRET_KEY: minioadmin
+  S3_FORCE_PATH_STYLE: "true"
+  WEB_ORIGIN: http://localhost:3000
+  NEXT_PUBLIC_API_URL: http://api:3001
+  API_PORT: "3001"
+  VAULT_BUCKET: obsidian-src
+  NOTE_HUB_ROOT: /app
+  NOTION_CLIENT_ID: ${NOTION_CLIENT_ID:-}
+  NOTION_CLIENT_SECRET: ${NOTION_CLIENT_SECRET:-}
+  NOTION_REDIRECT_URI: ${NOTION_REDIRECT_URI:-http://127.0.0.1:3000/v1/connections/oauth/notion/callback}
+
 services:
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: notehub
       POSTGRES_PASSWORD: notehub
@@ -19,6 +39,11 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   minio:
     image: minio/minio:latest
@@ -31,6 +56,110 @@ services:
       - "9001:9001"
     volumes:
       - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      MC_HOST_local: http://minioadmin:minioadmin@minio:9000
+    entrypoint: ["/bin/sh", "-c"]
+    command: "mc mb -p local/hub-dev && mc mb -p local/obsidian-src && mc mb -p local/siyuan-src && echo minio buckets ready"
+
+  migrate:
+    image: note-hub-api
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["pnpm", "--filter", "@note-hub/api", "migrate"]
+    env_file:
+      - .env.example
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: note-hub-api
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    init: true
+    env_file:
+      - .env.example
+    environment:
+      <<: *app-env
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  worker:
+    image: note-hub-worker
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    init: true
+    env_file:
+      - .env.example
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    image: note-hub-web
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://api:3001
+    init: true
+    env_file:
+      - .env.example
+    environment:
+      <<: *app-env
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

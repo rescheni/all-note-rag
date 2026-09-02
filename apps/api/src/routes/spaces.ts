@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { buildActivitySeries } from "@note-hub/core";
 import { query } from "../db.ts";
 import { errors, jsonError } from "../errors.ts";
 import {
@@ -207,4 +208,39 @@ spaceRoutes.delete("/spaces/:id/members/:userId", async (c) => {
   }
   await query("DELETE FROM space_members WHERE space_id = $1 AND user_id = $2", [id, userId]);
   return c.json({ ok: true });
+});
+
+spaceRoutes.get("/spaces/:id/activity", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const gate = await requireRole(user.id, id, "viewer");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
+  const rawDays = Number(c.req.query("days") ?? 365);
+  const days = Number.isFinite(rawDays) ? Math.max(1, Math.min(366, Math.floor(rawDays))) : 365;
+  const since = new Date(Date.now() - days * 86400000);
+  const notes = await query<{ date: string; notes: number }>(
+    `SELECT to_char((coalesce(source_updated_at, updated_at) AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') AS date,
+            count(*)::int AS notes
+     FROM notes
+     WHERE space_id = $1 AND deleted_at IS NULL AND coalesce(source_updated_at, updated_at) >= $2
+     GROUP BY 1`,
+    [id, since],
+  );
+  const upserts = await query<{ date: string; upserts: number }>(
+    `SELECT to_char((r.finished_at AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') AS date,
+            coalesce(sum(r.upserts), 0)::int AS upserts
+     FROM sync_run r
+     INNER JOIN connections c ON c.id = r.connection_id
+     WHERE c.space_id = $1 AND r.finished_at IS NOT NULL AND r.finished_at >= $2
+     GROUP BY 1`,
+    [id, since],
+  );
+  return c.json({
+    days: buildActivitySeries({
+      days,
+      notes: notes.rows,
+      upserts: upserts.rows,
+    }),
+  });
 });

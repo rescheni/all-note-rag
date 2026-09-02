@@ -148,18 +148,21 @@ export function createPgHostApi(opts: {
   const { query, spaceId, userId } = opts;
   return {
     async queryNotes(args) {
-      const params: unknown[] = [spaceId];
-      let sql = `SELECT id, path, title, markdown, frontmatter, hash, updated_at
-                 FROM notes WHERE space_id = $1 AND deleted_at IS NULL`;
+      const params: unknown[] = [spaceId, userId];
+      let sql = `SELECT n.id, n.path, n.title, n.markdown, n.frontmatter, n.hash, n.updated_at
+                 FROM notes n
+                 INNER JOIN space_members m ON m.space_id = n.space_id AND m.user_id = $2
+                 WHERE n.space_id = $1 AND n.deleted_at IS NULL
+                   AND note_visible_to(n.acl_snapshot, m.user_id, m.role)`;
       if (args?.ids?.length) {
         params.push(args.ids);
-        sql += ` AND id = ANY($${params.length}::uuid[])`;
+        sql += ` AND n.id = ANY($${params.length}::uuid[])`;
       }
       if (args?.path) {
         params.push(args.path + "%");
-        sql += ` AND path LIKE $${params.length}`;
+        sql += ` AND n.path LIKE $${params.length}`;
       }
-      sql += " ORDER BY updated_at DESC LIMIT 500";
+      sql += " ORDER BY n.updated_at DESC LIMIT 500";
       const r = await query(sql, params);
       return r.rows.map(asNote);
     },

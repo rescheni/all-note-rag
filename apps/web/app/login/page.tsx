@@ -21,7 +21,7 @@ export default function LoginPage() {
     }
   }
   return (
-    <div className="card" style={{ maxWidth: 420, margin: "2rem auto" }}>
+    <div className="auth-panel">
       <h1>登录</h1>
       {err && <p className="err">{err}</p>}
       <form onSubmit={onSubmit}>

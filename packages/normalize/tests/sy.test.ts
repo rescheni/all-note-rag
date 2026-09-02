@@ -65,6 +65,47 @@ describe("syToMarkdown", () => {
     expect(markdown).toContain("## Hi");
     expect(blocks[0].source_block_id).toBe("h1");
   });
+
+  it("converts NodeImage to markdown image instead of jammed text", () => {
+    const { markdown } = syToMarkdown({
+      Type: "NodeDocument",
+      Children: [
+        {
+          Type: "NodeParagraph",
+          ID: "p-img",
+          Children: [
+            {
+              Type: "NodeImage",
+              Children: [
+                { Type: "NodeBang", Data: "!" },
+                { Type: "NodeOpenBracket", Data: "[" },
+                { Type: "NodeLinkText", Data: "image" },
+                { Type: "NodeCloseBracket", Data: "]" },
+                { Type: "NodeOpenParen", Data: "(" },
+                { Type: "NodeLinkDest", Data: "assets/foo.png" },
+                { Type: "NodeCloseParen", Data: ")" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(markdown).toContain("![image](assets/foo.png)");
+    expect(markdown).not.toContain("imageassets/foo.png");
+  });
+
+  it("converts HTMLBlock img tags to markdown images", () => {
+    const { markdown } = syToMarkdown({
+      Type: "NodeDocument",
+      Children: [
+        {
+          Type: "NodeHTMLBlock",
+          Data: '<img src="assets/bar.png" alt="photo">',
+        },
+      ],
+    });
+    expect(markdown).toContain("![photo](assets/bar.png)");
+  });
 });
 
 describe("normalizeSiyuanNote", () => {

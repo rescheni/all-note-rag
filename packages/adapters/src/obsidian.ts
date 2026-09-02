@@ -7,6 +7,8 @@ import {
 } from "@aws-sdk/client-s3";
 import {
   DEFAULT_OBSIDIAN_IGNORE,
+  guessContentType,
+  isAssetTarget,
   isMarkdownPath,
   obsidianSourceId,
   posixVaultPath,
@@ -144,6 +146,18 @@ export class ObsidianAdapter implements Adapter {
         });
       }
     }
+    for (const rel of Object.keys(current)) {
+      if (isMarkdownPath(rel)) continue;
+      if (!isAssetTarget(rel)) continue;
+      const etag = current[rel].etag;
+      if (prev[rel] && prev[rel] === etag) continue;
+      changes.push({
+        type: "upsert",
+        source_id: obsidianSourceId(ctx.connection.id, rel),
+        path: rel,
+        etag,
+      });
+    }
 
     const referenced = new Set<string>();
     const needScan = mdRels.filter((rel) => !prev[rel] || prev[rel] !== current[rel].etag || Object.keys(prev).length === 0);
@@ -169,11 +183,14 @@ export class ObsidianAdapter implements Adapter {
       /* incremental: also upsert md already added */
     }
 
+    const listedPaths = new Set(changes.map((c) => c.path).filter(Boolean));
     for (const rel of referenced) {
       if (isMarkdownPath(rel)) continue;
+      if (listedPaths.has(rel)) continue;
       const etag = current[rel]?.etag;
       if (!etag) continue;
       if (prev[rel] && prev[rel] === etag) continue;
+      listedPaths.add(rel);
       changes.push({
         type: "upsert",
         source_id: obsidianSourceId(ctx.connection.id, rel),
@@ -200,7 +217,7 @@ export class ObsidianAdapter implements Adapter {
     // Unchanged md files should not appear. First listing: all md + referenced png.
     const nextEtags: Record<string, string> = {};
     for (const [rel, v] of Object.entries(current)) {
-      if (isMarkdownPath(rel) || referenced.has(rel) || prev[rel]) {
+      if (isMarkdownPath(rel) || isAssetTarget(rel) || referenced.has(rel) || prev[rel]) {
         nextEtags[rel] = v.etag;
       }
     }
@@ -216,17 +233,29 @@ export class ObsidianAdapter implements Adapter {
     const key = prefix ? `${prefix}/${path}` : path;
     try {
       const bytes = await this.getKey(ctx, key);
+      if (!isMarkdownPath(path)) {
+        const name = path.split("/").pop() || path;
+        return {
+          source_id,
+          path,
+          title: name,
+          raw: "",
+          kind: "asset",
+          assets: [{ path, bytes, contentType: guessContentType(path) }],
+        };
+      }
       const raw = new TextDecoder().decode(bytes);
       const assets: NotePayload["assets"] = [];
-      if (isMarkdownPath(path)) {
-        for (const rel of referencedAssetPaths(raw, path)) {
-          const aPrefix = prefix ? `${prefix}/${rel}` : rel;
-          try {
-            const ab = await this.getKey(ctx, aPrefix);
-            assets.push({ path: rel, bytes: ab });
-          } catch {
-            /* missing attachment is not fatal */
-          }
+      const seen = new Set<string>();
+      for (const rel of referencedAssetPaths(raw, path)) {
+        if (seen.has(rel)) continue;
+        seen.add(rel);
+        const aPrefix = prefix ? `${prefix}/${rel}` : rel;
+        try {
+          const ab = await this.getKey(ctx, aPrefix);
+          assets.push({ path: rel, bytes: ab, contentType: guessContentType(rel) });
+        } catch {
+          /* missing attachment is not fatal */
         }
       }
       return {

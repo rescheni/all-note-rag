@@ -7,4 +7,4 @@
 - `workspace/temp/blocktree.db` 可重建索引，不当作源
 - `workspace/data/assets/hello.txt` 全局资源
 
-`official-repo/repo/` 模拟官方 S3 dejavu 快照。v1 **不解包**，连接向导与适配器必须拒绝。
+`official-repo/repo/` 模拟官方 S3 dejavu 快照。填写数据仓库密码后只读解开最新快照中的 `.sy`；无密码返回 `siyuan_repo_password_required`。

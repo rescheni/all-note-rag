@@ -26,16 +26,23 @@ export type RetrieveHit = {
   preview_url: string;
 };
 
+export type ChunkLoadOpts = {
+  noteIds?: string[];
+  limit?: number;
+  userId?: string;
+  role?: string;
+};
+
 export type LoadChunks = (
   spaceId: string,
   query: string,
-  opts?: { noteIds?: string[]; limit?: number },
+  opts?: ChunkLoadOpts,
 ) => Promise<RetrieveChunk[]>;
 
 export type LoadVectorChunks = (
   spaceId: string,
   queryEmbedding: number[],
-  opts?: { noteIds?: string[]; limit?: number },
+  opts?: ChunkLoadOpts,
 ) => Promise<RetrieveChunk[]>;
 
 export type HybridRetrieveOpts = {
@@ -46,6 +53,8 @@ export type HybridRetrieveOpts = {
   loadChunks?: LoadChunks;
   loadVectorChunks?: LoadVectorChunks;
   queryEmbedding?: number[];
+  userId?: string;
+  role?: string;
 };
 
 export type HybridRetrieveResult = {
@@ -122,6 +131,8 @@ export async function hybridRetrieve(
     chunks = await opts.loadChunks(spaceId, q, {
       noteIds: opts.noteIds,
       limit: fetchLimit,
+      userId: opts.userId,
+      role: opts.role,
     });
   } else {
     chunks = [];
@@ -145,6 +156,8 @@ export async function hybridRetrieve(
       const vchunks = await opts.loadVectorChunks(spaceId, qEmb, {
         noteIds: opts.noteIds,
         limit: fetchLimit,
+        userId: opts.userId,
+        role: opts.role,
       });
       for (const ch of vchunks) {
         if (ch.space_id !== spaceId) continue;
@@ -232,6 +245,8 @@ export function loadChunksViaSql(run: SqlQuery): LoadChunks {
     const noteIds = rawIds.filter((id) => UUID_RE.test(id));
     const hasNotes = noteIds.length > 0;
     const limit = opts?.limit ?? 40;
+    const userId = opts?.userId ?? null;
+    const role = opts?.role ?? null;
     const r = await run(
       `SELECT n.id AS note_id, n.title, n.space_id, ch.text, ch.heading_path,
               b.id AS block_uuid, b.source_block_id, ch.embedding
@@ -240,6 +255,7 @@ export function loadChunksViaSql(run: SqlQuery): LoadChunks {
        LEFT JOIN blocks b ON b.id = ch.block_id
        WHERE n.space_id = $1 AND ch.space_id = $1
          AND ($4::uuid[] IS NULL OR n.id = ANY($4::uuid[]))
+         AND ($6::uuid IS NULL OR note_visible_to(n.acl_snapshot, $6::uuid, $7::text))
          AND (
            n.title ILIKE $2
            OR ch.text ILIKE $2
@@ -251,7 +267,7 @@ export function loadChunksViaSql(run: SqlQuery): LoadChunks {
          + CASE WHEN $3 <> '' THEN COALESCE(ts_rank(ch.fts, to_tsquery('simple', $3)), 0) ELSE 0 END
        ) DESC
        LIMIT $5`,
-      [spaceId, like, tokens || "", hasNotes ? noteIds : null, limit],
+      [spaceId, like, tokens || "", hasNotes ? noteIds : null, limit, userId, role],
     );
     return mapSqlRows(r.rows as SqlRow[]);
   };
@@ -264,6 +280,8 @@ export function loadVectorChunksViaSql(run: SqlQuery): LoadVectorChunks {
     const hasNotes = noteIds.length > 0;
     const limit = opts?.limit ?? 40;
     const vec = formatVector(queryEmbedding);
+    const userId = opts?.userId ?? null;
+    const role = opts?.role ?? null;
     const r = await run(
       `SELECT n.id AS note_id, n.title, n.space_id, ch.text, ch.heading_path,
               b.id AS block_uuid, b.source_block_id, ch.embedding
@@ -273,9 +291,10 @@ export function loadVectorChunksViaSql(run: SqlQuery): LoadVectorChunks {
        WHERE n.space_id = $1 AND ch.space_id = $1
          AND ch.embedding IS NOT NULL
          AND ($3::uuid[] IS NULL OR n.id = ANY($3::uuid[]))
+         AND ($5::uuid IS NULL OR note_visible_to(n.acl_snapshot, $5::uuid, $6::text))
        ORDER BY ch.embedding <=> $2::vector
        LIMIT $4`,
-      [spaceId, vec, hasNotes ? noteIds : null, limit],
+      [spaceId, vec, hasNotes ? noteIds : null, limit, userId, role],
     );
     return mapSqlRows(r.rows as SqlRow[]);
   };

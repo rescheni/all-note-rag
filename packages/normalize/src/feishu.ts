@@ -149,6 +149,18 @@ export function feishuBlocksToMarkdown(blocks: unknown[]): {
       md = `> ${text}`;
     } else if (t === 22) {
       md = "---";
+    } else if (t === 27) {
+      const img = asDict(b.image);
+      const token = String(img?.token ?? "");
+      const name = String(img?.name ?? "").trim() || (token ? `${token}.png` : "image.png");
+      md = `![](${name})`;
+      text = name;
+    } else if (t === 23) {
+      const file = asDict(b.file);
+      const token = String(file?.token ?? "");
+      const name = String(file?.name ?? "").trim() || token || "file";
+      md = `[${name}](${name})`;
+      text = name;
     } else {
       text = elementsText(blockElements(b));
       md = text;
@@ -230,4 +242,32 @@ export function normalizeFeishuNote(
     links: urlLinks(body),
     assets: extraAssets,
   };
+}
+
+export type FeishuMediaRef = { token: string; name: string; kind: "image" | "file" };
+
+export function feishuMediaRefs(blocks: unknown[]): FeishuMediaRef[] {
+  const out: FeishuMediaRef[] = [];
+  const seen = new Set<string>();
+  for (const raw of Array.isArray(blocks) ? blocks : []) {
+    const b = asDict(raw);
+    if (!b) continue;
+    const t = Number(b.block_type);
+    if (t === 27) {
+      const img = asDict(b.image);
+      const token = String(img?.token ?? "").trim();
+      if (!token || seen.has(token)) continue;
+      seen.add(token);
+      const name = String(img?.name ?? "").trim() || `${token}.png`;
+      out.push({ token, name, kind: "image" });
+    } else if (t === 23) {
+      const file = asDict(b.file);
+      const token = String(file?.token ?? "").trim();
+      if (!token || seen.has(token)) continue;
+      seen.add(token);
+      const name = String(file?.name ?? "").trim() || token;
+      out.push({ token, name, kind: "file" });
+    }
+  }
+  return out;
 }

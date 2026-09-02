@@ -1,4 +1,10 @@
-export const API = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3001";
+export function apiOrigin(): string {
+  if (typeof window !== "undefined") return window.location.origin;
+  return process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3001";
+}
+
+/** Browser: same-origin (Next rewrite). Server: local API. */
+export const API = typeof window !== "undefined" ? "" : (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3001");
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;

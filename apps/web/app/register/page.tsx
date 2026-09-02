@@ -24,7 +24,7 @@ export default function RegisterPage() {
     }
   }
   return (
-    <div className="card" style={{ maxWidth: 420, margin: "2rem auto" }}>
+    <div className="auth-panel">
       <h1>注册</h1>
       <p className="muted">P0 使用本地邮箱账号，注册后自动创建个人空间。</p>
       {err && <p className="err">{err}</p>}

@@ -2,13 +2,14 @@ import type { S3Client } from "@aws-sdk/client-s3";
 import type { Adapter, SourceKind } from "@note-hub/core";
 import { ObsidianAdapter } from "./obsidian.ts";
 import { SiYuanAdapter, type ObjectStore } from "./siyuan.ts";
-import { NotionAdapter } from "./notion.ts";
+import { NotionAdapter, type NotionOAuthClient } from "./notion.ts";
 import { FeishuAdapter } from "./feishu.ts";
 
 export type AdapterOptions = {
   store?: ObjectStore;
   fetch?: typeof fetch;
   s3?: S3Client;
+  notionOAuth?: NotionOAuthClient | null;
 };
 
 export function createAdapter(source: SourceKind | string, opts: AdapterOptions = {}): Adapter {
@@ -18,7 +19,7 @@ export function createAdapter(source: SourceKind | string, opts: AdapterOptions 
     case "siyuan":
       return new SiYuanAdapter(opts);
     case "notion":
-      return new NotionAdapter(opts.fetch);
+      return new NotionAdapter(opts.fetch, opts.notionOAuth ?? null);
     case "feishu":
       return new FeishuAdapter(opts.fetch);
     default:

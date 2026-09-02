@@ -75,6 +75,47 @@ function blockRefId(n: SyNode): string {
   return "";
 }
 
+function htmlImgsToMarkdown(html: string): string {
+  if (!html || !/<img\b/i.test(html)) return "";
+  const out: string[] = [];
+  const re = /<img\b[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    const tag = m[0];
+    const srcM = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+    const src = (srcM?.[1] || srcM?.[2] || srcM?.[3] || "").trim();
+    if (!src) continue;
+    const altM = /\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(tag);
+    const alt = (altM?.[1] || altM?.[2] || altM?.[3] || "image").trim() || "image";
+    out.push(`![${alt}](${src})`);
+  }
+  return out.join("\n\n");
+}
+
+function imageNodeToMarkdown(n: SyNode): string {
+  let alt = "";
+  let dest = "";
+  const walk = (node: SyNode) => {
+    const t = nodeType(node);
+    if (t === "LinkText") {
+      if (!alt) alt = dataOf(node);
+      return;
+    }
+    if (t === "LinkDest") {
+      if (!dest) dest = dataOf(node);
+      return;
+    }
+    for (const ch of childrenOf(node)) walk(ch);
+  };
+  walk(n);
+  if (!dest) {
+    const fromHtml = htmlImgsToMarkdown(dataOf(n));
+    if (fromHtml) return fromHtml;
+  }
+  if (!dest) return "";
+  return `![${alt || "image"}](${dest})`;
+}
+
 function inlineText(n: SyNode, links: NormalizedLink[], keepBlockRefs: boolean): string {
   const t = nodeType(n);
   if (isBlockRef(n)) {
@@ -112,6 +153,11 @@ function inlineText(n: SyNode, links: NormalizedLink[], keepBlockRefs: boolean):
   }
   if (t === "CodeBlockCode" || t === "MathBlockContent" || t === "LinkText" || t === "LinkDest") {
     return dataOf(n);
+  }
+  if (t === "Image") return imageNodeToMarkdown(n);
+  if (t === "HTMLBlock" || t === "HTML" || t === "InlineHTML" || t === "InlineHtml") {
+    const md = htmlImgsToMarkdown(dataOf(n));
+    if (md) return md;
   }
   if (t === "SoftBreak" || t === "Br") return "\n";
   return childrenOf(n).map((c) => inlineText(c, links, keepBlockRefs)).join("");
@@ -302,6 +348,23 @@ function renderBlock(
       depth,
     });
     return md;
+  }
+
+  if (t === "HTMLBlock" || t === "HTML") {
+    const html = dataOf(n) || kids.map((c) => dataOf(c)).join("");
+    const md = htmlImgsToMarkdown(html);
+    if (md) {
+      const id = nodeId(n) || `html-${blocks.length}`;
+      blocks.push({
+        source_block_id: id,
+        type: "para",
+        text: md.replace(/\s+/g, " ").trim(),
+        markdown: md,
+        order_key: orderKey(blocks.length),
+        depth,
+      });
+      return md;
+    }
   }
 
   // unknown container: walk children

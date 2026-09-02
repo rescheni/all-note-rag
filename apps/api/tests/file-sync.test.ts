@@ -3,7 +3,7 @@ import "../src/load-env.ts";
 import { app } from "../src/app.ts";
 import { env } from "../src/env.ts";
 import { pool } from "../src/db.ts";
-import { redis } from "../src/queue.ts";
+import { redis, syncFileJobId, syncFileQueue } from "../src/queue.ts";
 
 const suffix = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 const email = `filesync-${suffix}@example.test`;
@@ -62,6 +62,12 @@ describe("file-level s3 hook", () => {
 
   afterAll(async () => {
     try {
+      if (connId) {
+        const job = await syncFileQueue.getJob(syncFileJobId(connId));
+        if (job) try { await job.remove(); } catch { /* */ }
+        const next = await syncFileQueue.getJob(`${syncFileJobId(connId)}-next`);
+        if (next) try { await next.remove(); } catch { /* */ }
+      }
       if (userId) {
         await pool.query("DELETE FROM spaces WHERE owner_user_id = $1", [userId]);
         await pool.query("DELETE FROM users WHERE id = $1", [userId]);
@@ -92,7 +98,7 @@ describe("file-level s3 hook", () => {
     const ids = [r.body.connection_id, ...jobs.map((j: { connection_id: string }) => j.connection_id)];
     expect(ids).toContain(connId);
     const job = jobs.find((j: { connection_id: string }) => j.connection_id === connId) ?? r.body;
-    expect(job.job_id).toMatch(new RegExp(`^syncfile-${connId}-`));
+    expect(job.job_id).toBe(syncFileJobId(connId));
     expect(job.keys).toContain("vault1/Daily/x.md");
     expect(JSON.stringify(r.body)).not.toContain(env.s3SecretKey);
     expect(JSON.stringify(r.body)).not.toMatch(/secret_key|access_key/i);
@@ -119,6 +125,31 @@ describe("file-level s3 hook", () => {
     expect(sync.body.keys).toEqual(["vault1/Daily/x.md"]);
   });
 
+  it("debounces a burst of puts into one job with merged keys", async () => {
+    const a = await post(
+      "/v1/hooks/s3",
+      { bucket: "obsidian-src", key: "vault1/Daily/a.md", eventName: "s3:ObjectCreated:Put" },
+      undefined,
+      { "x-hub-secret": env.hubSecret },
+    );
+    const b = await post(
+      "/v1/hooks/s3",
+      { bucket: "obsidian-src", key: "vault1/Daily/b.md", eventName: "s3:ObjectRemoved:Delete" },
+      undefined,
+      { authorization: `Bearer ${env.hubSecret}` },
+    );
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    const jobA = (a.body.jobs ?? []).find((j: { connection_id: string }) => j.connection_id === connId) ?? a.body;
+    const jobB = (b.body.jobs ?? []).find((j: { connection_id: string }) => j.connection_id === connId) ?? b.body;
+    expect(jobA.job_id).toBe(syncFileJobId(connId));
+    expect(jobB.job_id).toBe(jobA.job_id);
+    const queued = await syncFileQueue.getJob(syncFileJobId(connId));
+    expect(queued).toBeTruthy();
+    const keys = (queued?.data?.keys ?? jobB.keys) as string[];
+    expect(keys).toEqual(expect.arrayContaining(["vault1/Daily/a.md", "vault1/Daily/b.md"]));
+  });
+
   it("unknown bucket 404", async () => {
     const r = await post(
       "/v1/hooks/s3",
@@ -127,6 +158,30 @@ describe("file-level s3 hook", () => {
       { "x-hub-secret": env.hubSecret },
     );
     expect(r.status).toBe(404);
+  });
+
+  it("ignores unrelated prefix and hub canonical keys", async () => {
+    const wrongPrefix = await post(
+      "/v1/hooks/s3",
+      { bucket: "obsidian-src", key: "other-vault/Daily/x.md" },
+      undefined,
+      { "x-hub-secret": env.hubSecret },
+    );
+    expect(wrongPrefix.status).toBe(404);
+    const hub = await post(
+      "/v1/hooks/s3",
+      { bucket: env.s3Bucket, key: "canonical/space/note/note.md" },
+      undefined,
+      { "x-hub-secret": env.hubSecret },
+    );
+    expect(hub.status).toBe(404);
+    const ignored = await post(
+      "/v1/hooks/s3",
+      { bucket: "obsidian-src", key: "vault1/.obsidian/app.json" },
+      undefined,
+      { "x-hub-secret": env.hubSecret },
+    );
+    expect(ignored.status).toBe(404);
   });
 
   it("rejects missing hub secret", async () => {

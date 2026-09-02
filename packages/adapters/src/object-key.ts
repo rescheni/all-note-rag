@@ -103,7 +103,9 @@ export function parseSiyuanWorkspaceRel(rel: string): {
       const parts = r.split("/");
       const dataIdx = parts.indexOf("data");
       const boxId = dataIdx >= 0 ? parts[dataIdx + 1] ?? "" : "";
-      return { boxId, sourceId: r, kind: "asset" };
+      const relAsset = dataIdx >= 0 ? parts.slice(dataIdx + 2).join("/") : r;
+      const sourceId = boxId ? `asset:${boxId}:${relAsset}` : `asset:${r}`;
+      return { boxId, sourceId, kind: "asset" };
     }
     return { boxId: "", sourceId: r, kind: "asset" };
   }

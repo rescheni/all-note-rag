@@ -44,6 +44,7 @@ export async function runPostSyncGrowth(spaceId: string, notes: UpsertedNote[]):
       if (enabled) {
         await runOfficialHook("growth-weekly", {
           space_id: spaceId,
+          space_kind: "personal",
           hook: "post-sync",
           payload: { notes: payloadNotes },
           host,
@@ -61,6 +62,7 @@ export async function runPostSyncGrowth(spaceId: string, notes: UpsertedNote[]):
         try {
           await runOfficialHook("meeting-extract", {
             space_id: spaceId,
+            space_kind: row.kind === "team" ? "team" : "personal",
             hook: "post-sync",
             payload: { notes: [note] },
             host,

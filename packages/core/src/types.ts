@@ -21,6 +21,18 @@ export type Change = {
   path?: string;
   etag?: string;
   source_updated_at?: string;
+  /** Dejavu object-chunk count for this file, when known. */
+  chunk_count?: number;
+};
+
+export type ContactsSyncSnapshot = {
+  last_at: string;
+  pulled: number;
+  matched: number;
+  added: number;
+  skipped: number;
+  already_member: number;
+  error?: string;
 };
 
 export type ConnectionConfig = {
@@ -39,6 +51,8 @@ export type ConnectionConfig = {
   wiki_space_id?: string;
   obj_types?: string[];
   mode?: string;
+  /** Last Feishu contacts sync tallies. Never contains tokens or emails. */
+  contacts_sync?: ContactsSyncSnapshot;
 };
 
 export type ConnectionRecord = {
@@ -59,8 +73,11 @@ export type ConnectionSecrets = {
   access_key?: string;
   secret_key?: string;
   token?: string;
+  access_token?: string;
+  refresh_token?: string;
   app_id?: string;
   app_secret?: string;
+  repo_password?: string;
 };
 
 export type AdapterContext = {
@@ -69,6 +86,8 @@ export type AdapterContext = {
   cursor: Record<string, unknown> | null;
   /** Full object key when doing file-level sync (skip ListObjects). */
   objectKey?: string;
+  /** Persist rotated OAuth tokens; never log the payload. */
+  persistSecrets?: (secrets: ConnectionSecrets) => Promise<void>;
 };
 
 export type ProbeResult = {
@@ -94,6 +113,8 @@ export type NotePayload = {
   etag?: string;
   source_updated_at?: string;
   acl?: Record<string, unknown>;
+  /** Lightweight file/image note (not a markdown/docx document). */
+  kind?: "note" | "asset";
 };
 
 export type NormalizedBlock = {

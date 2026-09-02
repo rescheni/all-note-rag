@@ -1,28 +1,344 @@
 import {
+  loadAiSettings,
+  collectAssetRefs,
   decryptSecret,
+  encryptSecret,
+  guessContentType,
   isHubError,
-  isMarkdownPath,
+  isImagePath,
+  resolveNoteSourceUpdatedAt,
+  sha256Hex,
   toFtsTokens,
   type Adapter,
   type AdapterContext,
   type ConnectionRecord,
   type ConnectionSecrets,
+  type NormalizedBlock,
   type NormalizedNote,
 } from "@note-hub/core";
-import { createAdapter, decodeObjectKey, mapConnectionObjectKey, siyuanBoxConfRel } from "@note-hub/adapters";
+import { createAdapter, decodeObjectKey, mapConnectionObjectKey, mapPool, siyuanBoxConfRel } from "@note-hub/adapters";
 import { embedTexts, embeddingModelId, formatVector } from "@note-hub/retrieve";
 import { normalizeObsidianNote, normalizeSiyuanNote, normalizeNotionNote, normalizeFeishuNote, referencedAssetPaths } from "@note-hub/normalize";
 import { renderPreviewHtml } from "@note-hub/preview";
-import { sha256Hex } from "@note-hub/core";
 import { query } from "./db.ts";
 import { env } from "./env.ts";
 import { putHub } from "./s3.ts";
+import { assetHeadingPath, extractAssetText } from "./extract-asset.ts";
 import { runPostSyncGrowth, type UpsertedNote } from "./post-sync-growth.ts";
+import { runContactsSync } from "./contacts-sync.ts";
+import {
+  fileChunkCount,
+  shouldFlushProgress,
+  sumChunksTotal,
+  type SyncProgress,
+} from "./sync-progress.ts";
+
+
+const UPSERT_CONCURRENCY = 8;
+
+function createMutex() {
+  let tail: Promise<void> = Promise.resolve();
+  return {
+    run<T>(fn: () => Promise<T>): Promise<T> {
+      const run = tail.then(fn, fn);
+      tail = run.then(() => undefined, () => undefined);
+      return run;
+    },
+  };
+}
+
+export async function markZombieSyncRuns(): Promise<void> {
+  await query(
+    `UPDATE sync_run SET finished_at = now()
+     WHERE finished_at IS NULL AND files_total = 0 AND started_at < now() - interval '2 minutes'`,
+  );
+}
+
+export async function finishAllUnfinishedSyncRuns(): Promise<void> {
+  await query(`UPDATE sync_run SET finished_at = now() WHERE finished_at IS NULL`);
+}
+
+async function persistCursorMeta(connectionId: string, nextCursor: Record<string, unknown>): Promise<void> {
+  const patch: Record<string, unknown> = {};
+  for (const key of ["files", "indexId", "repoRoot", "boxNames", "boxes", "keys"] as const) {
+    if (nextCursor[key] !== undefined) patch[key] = nextCursor[key];
+  }
+  if (!Object.keys(patch).length) return;
+  await query(
+    `UPDATE connections SET cursor = COALESCE(cursor, '{}'::jsonb) || $2::jsonb, updated_at = now() WHERE id = $1`,
+    [connectionId, JSON.stringify(patch)],
+  );
+}
+
+async function mergeCursorEtag(connectionId: string, sourceId: string, etag: string | null | undefined): Promise<void> {
+  if (!sourceId) return;
+  if (etag == null || etag === "") {
+    await query(
+      `UPDATE connections SET
+         cursor = jsonb_set(
+           COALESCE(cursor, '{}'::jsonb),
+           '{etags}',
+           COALESCE(cursor->'etags', '{}'::jsonb) - $2::text
+         ),
+         updated_at = now()
+       WHERE id = $1`,
+      [connectionId, sourceId],
+    );
+    return;
+  }
+  await query(
+    `UPDATE connections SET
+       cursor = jsonb_set(
+         COALESCE(cursor, '{}'::jsonb),
+         '{etags}',
+         COALESCE(cursor->'etags', '{}'::jsonb) || jsonb_build_object($2::text, $3::text)
+       ),
+       updated_at = now()
+     WHERE id = $1`,
+    [connectionId, sourceId, etag],
+  );
+}
 
 type ProcessResult =
-  | { status: "skip" }
-  | { status: "delete" }
-  | { status: "upsert"; note: UpsertedNote };
+  | { status: "skip"; chunkCount: number }
+  | { status: "delete"; chunkCount: number }
+  | { status: "upsert"; note: UpsertedNote; chunkCount: number };
+
+function basenameOf(path: string): string {
+  return path.split("/").pop() || path;
+}
+
+function isAssetNote(payload: { kind?: string; source_id: string; path: string }): boolean {
+  if (payload.kind === "asset") return true;
+  if (payload.source_id.startsWith("asset:")) return true;
+  const p = payload.path.toLowerCase();
+  if (p.endsWith(".md") || p.endsWith(".sy")) return false;
+  return isImagePath(p) || /\.(pdf|docx?)$/i.test(p);
+}
+
+function assetExtractBlocks(
+  items: { hash: string; filename: string; contentType?: string; text: string }[],
+  start: number,
+): NormalizedBlock[] {
+  const blocks: NormalizedBlock[] = [];
+  let i = start;
+  for (const a of items) {
+    const heading = assetHeadingPath(a.filename, a.contentType);
+    blocks.push({
+      source_block_id: `asset-h:${a.hash}`,
+      type: "heading",
+      text: heading,
+      markdown: `## ${heading}`,
+      order_key: i.toString(36).padStart(4, "0"),
+      depth: 2,
+    });
+    i++;
+    blocks.push({
+      source_block_id: `asset:${a.hash}`,
+      type: "embed",
+      text: a.text,
+      markdown: a.text,
+      order_key: i.toString(36).padStart(4, "0"),
+      depth: 0,
+    });
+    i++;
+  }
+  return blocks;
+}
+
+type StoredAsset = {
+  hash: string;
+  filename: string;
+  contentType?: string;
+  text: string;
+  source_path: string;
+};
+
+async function persistAndExtractAssets(
+  noteId: string,
+  spaceId: string,
+  assets: NormalizedNote["assets"],
+): Promise<StoredAsset[]> {
+  const existing = await query<{
+    id: string;
+    source_path: string;
+    hash: string | null;
+    extracted_text: string | null;
+    extract_status: string | null;
+    s3_key: string;
+  }>(
+    "SELECT id, source_path, hash, extracted_text, extract_status, s3_key FROM assets WHERE note_id = $1",
+    [noteId],
+  );
+  const keep = new Set(assets.map((a) => a.source_path));
+  for (const row of existing.rows) {
+    if (!keep.has(row.source_path)) await query("DELETE FROM assets WHERE id = $1", [row.id]);
+  }
+  const out: StoredAsset[] = [];
+  for (const a of assets) {
+    const name = basenameOf(a.source_path);
+    const s3Key = `canonical/${spaceId}/${noteId}/assets/${name}`;
+    const prev = existing.rows.find((r) => r.source_path === a.source_path);
+    const image = isImagePath(name) || (a.content_type ?? "").startsWith("image/");
+    const sameHash = Boolean(prev && prev.hash === a.hash);
+    // Hash-stable images stay pending for the drain. Do not clobber a concurrent OCR write.
+    if (sameHash && prev) {
+      if (prev.s3_key !== s3Key) await putHub(s3Key, a.bytes, a.content_type);
+      await query(
+        `UPDATE assets SET content_type = $2, s3_key = $3, hash = $4, bytes = $5 WHERE id = $1`,
+        [prev.id, a.content_type ?? null, s3Key, a.hash, a.bytes.byteLength],
+      );
+      const text = prev.extracted_text ?? (image ? `图片 ${name}` : "");
+      out.push({ hash: a.hash, filename: name, contentType: a.content_type, text, source_path: a.source_path });
+      continue;
+    }
+    await putHub(s3Key, a.bytes, a.content_type);
+    let text = "";
+    let status = "skipped";
+    if (image) {
+      text = `图片 ${name}`;
+      status = "pending";
+    } else {
+      const extracted = await extractAssetText({ bytes: a.bytes, filename: name, contentType: a.content_type });
+      text = extracted.text;
+      status = extracted.status;
+    }
+    if (prev && prev.source_path === a.source_path) {
+      await query(
+        `UPDATE assets SET content_type = $2, s3_key = $3, hash = $4, bytes = $5, extracted_text = $6, extract_status = $7
+         WHERE id = $1`,
+        [prev.id, a.content_type ?? null, s3Key, a.hash, a.bytes.byteLength, text, status],
+      );
+    } else {
+      await query(
+        `INSERT INTO assets (note_id, space_id, source_path, content_type, s3_key, hash, bytes, extracted_text, extract_status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [noteId, spaceId, a.source_path, a.content_type ?? null, s3Key, a.hash, a.bytes.byteLength, text, status],
+      );
+    }
+    out.push({ hash: a.hash, filename: name, contentType: a.content_type, text, source_path: a.source_path });
+  }
+  return out;
+}
+
+async function backfillAssetExtracts(noteId: string, _spaceId: string, _title: string): Promise<number> {
+  // Sync skip path must not wait for OCR. Drain handles pending / placeholder.
+  const existingAssetChunks = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM chunks ch
+     INNER JOIN blocks b ON b.id = ch.block_id
+     WHERE ch.note_id = $1 AND b.source_block_id LIKE 'asset:%'`,
+    [noteId],
+  );
+  const n = Number(existingAssetChunks.rows[0]?.n ?? 0);
+  if (n > 0) return n;
+  const hasAssets = await query<{ n: string }>("SELECT count(*)::text AS n FROM assets WHERE note_id = $1", [noteId]);
+  if (Number(hasAssets.rows[0]?.n ?? 0) === 0) return 0;
+  return refreshNoteAssetChunks(noteId);
+}
+
+/** Upsert asset-* blocks only — never delete body blocks/chunks. */
+async function upsertAssetBlocksOnly(noteId: string, blocks: NormalizedBlock[]): Promise<Map<string, string>> {
+  const keep = new Set(blocks.map((b) => b.source_block_id));
+  const existing = await query<{ id: string; source_block_id: string }>(
+    "SELECT id, source_block_id FROM blocks WHERE note_id = $1 AND source_block_id LIKE 'asset%'",
+    [noteId],
+  );
+  for (const row of existing.rows) {
+    if (!keep.has(row.source_block_id)) {
+      await query("DELETE FROM chunks WHERE block_id = $1", [row.id]);
+      await query("DELETE FROM blocks WHERE id = $1", [row.id]);
+    }
+  }
+  const idBySource = new Map<string, string>();
+  for (const b of blocks) {
+    const r = await query<{ id: string }>(
+      `INSERT INTO blocks (note_id, source_block_id, type, text, order_key, depth)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (note_id, source_block_id)
+       DO UPDATE SET type = EXCLUDED.type, text = EXCLUDED.text, order_key = EXCLUDED.order_key, depth = EXCLUDED.depth
+       RETURNING id`,
+      [noteId, b.source_block_id, b.type, b.text, b.order_key, b.depth],
+    );
+    idBySource.set(b.source_block_id, r.rows[0].id);
+  }
+  return idBySource;
+}
+
+/** Rewrite only this note's asset chunks + embeddings after OCR. */
+export async function refreshNoteAssetChunks(noteId: string): Promise<number> {
+  const note = await query<{ space_id: string; title: string }>(
+    "SELECT space_id, title FROM notes WHERE id = $1",
+    [noteId],
+  );
+  const row = note.rows[0];
+  if (!row) return 0;
+  const assets = await query<{
+    hash: string | null;
+    source_path: string;
+    content_type: string | null;
+    extracted_text: string | null;
+  }>("SELECT hash, source_path, content_type, extracted_text FROM assets WHERE note_id = $1", [noteId]);
+  if (!assets.rows.length) return 0;
+  const stored: StoredAsset[] = assets.rows.map((a) => {
+    const name = basenameOf(a.source_path);
+    const fallback = `${isImagePath(name) || (a.content_type ?? "").startsWith("image/") ? "图片" : "附件"} ${name}`;
+    return {
+      hash: a.hash || "",
+      filename: name,
+      contentType: a.content_type ?? undefined,
+      text: a.extracted_text || fallback,
+      source_path: a.source_path,
+    };
+  });
+  const extra = assetExtractBlocks(stored, 1000);
+  const fake: NormalizedNote = {
+    source_id: "",
+    path: "",
+    title: row.title,
+    markdown: "",
+    frontmatter: {},
+    hash: "",
+    blocks: extra,
+    links: [],
+    assets: [],
+  };
+  const ids = await upsertAssetBlocksOnly(noteId, extra);
+  return writeAssetChunksOnly(noteId, row.space_id, fake, ids);
+}
+
+async function writeAssetChunksOnly(
+  noteId: string,
+  spaceId: string,
+  note: NormalizedNote,
+  blockIds: Map<string, string>,
+): Promise<number> {
+  await query(
+    `DELETE FROM chunks WHERE note_id = $1 AND (
+       heading_path LIKE '图片/%' OR heading_path LIKE '附件/%'
+       OR block_id IN (SELECT id FROM blocks WHERE note_id = $1 AND source_block_id LIKE 'asset%')
+     )`,
+    [noteId],
+  );
+  let heading = "";
+  const inserted: { id: string; text: string }[] = [];
+  for (const b of note.blocks) {
+    if (b.type === "heading") heading = b.text;
+    const text = b.text || b.markdown;
+    if (!text.trim()) continue;
+    const tokens = toFtsTokens(`${note.title} ${heading} ${text}`);
+    const tokenCount = tokens.split(/\s+/).filter(Boolean).length;
+    const row = await query<{ id: string }>(
+      `INSERT INTO chunks (note_id, space_id, block_id, heading_path, text, token_count, fts)
+       VALUES ($1,$2,$3,$4,$5,$6, to_tsvector('simple', $7))
+       RETURNING id`,
+      [noteId, spaceId, blockIds.get(b.source_block_id) ?? null, heading, text, tokenCount, tokens],
+    );
+    if (row.rows[0]?.id) inserted.push({ id: row.rows[0].id, text });
+  }
+  await writeEmbeddings(inserted, noteId);
+  return inserted.length;
+}
+
 
 async function loadSecrets(conn: ConnectionRecord): Promise<ConnectionSecrets | null> {
   const mode = conn.mode || conn.config?.mode;
@@ -34,15 +350,6 @@ async function loadSecrets(conn: ConnectionRecord): Promise<ConnectionSecrets | 
   const r = await query<{ ciphertext: string }>("SELECT ciphertext FROM secrets WHERE id = $1", [conn.secrets_ref]);
   if (!r.rows[0]) return fallback;
   return JSON.parse(decryptSecret(r.rows[0].ciphertext, env.hubSecret)) as ConnectionSecrets;
-}
-
-function guessContentType(path: string): string {
-  if (path.endsWith(".png")) return "image/png";
-  if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
-  if (path.endsWith(".gif")) return "image/gif";
-  if (path.endsWith(".webp")) return "image/webp";
-  if (path.endsWith(".svg")) return "image/svg+xml";
-  return "application/octet-stream";
 }
 
 async function upsertBlocks(noteId: string, note: NormalizedNote) {
@@ -75,8 +382,10 @@ async function upsertBlocks(noteId: string, note: NormalizedNote) {
 async function writeEmbeddings(rows: { id: string; text: string }[], noteId?: string): Promise<void> {
   if (!rows.length) return;
   try {
-    const vectors = await embedTexts(rows.map((c) => c.text));
-    const model = embeddingModelId();
+    const ai = await loadAiSettings(query, env.hubSecret);
+    const endpoint = { baseUrl: ai.base_url, apiKey: ai.api_key, model: ai.embedding_model };
+    const vectors = await embedTexts(rows.map((c) => c.text), endpoint);
+    const model = embeddingModelId(endpoint);
     for (let i = 0; i < rows.length; i++) {
       const vec = vectors[i];
       if (!vec?.length) continue;
@@ -114,7 +423,7 @@ async function embedNullChunks(opts: { noteId?: string; connectionId?: string })
   await writeEmbeddings(r.rows, opts.noteId);
 }
 
-async function writeChunks(noteId: string, spaceId: string, note: NormalizedNote, blockIds: Map<string, string>) {
+async function writeChunks(noteId: string, spaceId: string, note: NormalizedNote, blockIds: Map<string, string>): Promise<number> {
   await query("DELETE FROM chunks WHERE note_id = $1", [noteId]);
   let heading = "";
   const inserted: { id: string; text: string }[] = [];
@@ -133,6 +442,7 @@ async function writeChunks(noteId: string, spaceId: string, note: NormalizedNote
     if (row.rows[0]?.id) inserted.push({ id: row.rows[0].id, text });
   }
   await writeEmbeddings(inserted, noteId);
+  return inserted.length;
 }
 
 async function resolveLinks(connectionId: string, fromNoteId: string, note: NormalizedNote) {
@@ -167,19 +477,40 @@ async function processNote(
       "UPDATE notes SET deleted_at = now(), updated_at = now() WHERE connection_id = $1 AND source_id = $2 AND deleted_at IS NULL",
       [conn.id, sourceId],
     );
-    return { status: "delete" };
+    return { status: "delete", chunkCount: 0 };
   }
   const extraAssets = [];
+  const seenAssets = new Set<string>();
   for (const a of payload.assets ?? []) {
     if (!a.bytes) continue;
     extraAssets.push({
       source_path: a.path,
-      content_type: guessContentType(a.path),
+      content_type: a.contentType || guessContentType(a.path),
       bytes: a.bytes,
       hash: sha256Hex(a.bytes),
     });
+    seenAssets.add(a.path);
+    seenAssets.add(basenameOf(a.path));
   }
-  const note =
+  const rawText = typeof payload.raw === "string" ? payload.raw : "";
+  const refs = new Set([...referencedAssetPaths(rawText, payload.path), ...collectAssetRefs(rawText)]);
+  for (const ref of refs) {
+    if (seenAssets.has(ref) || seenAssets.has(basenameOf(ref))) continue;
+    try {
+      const bytes = await adapter.fetchAsset(ctx, ref);
+      if (!bytes?.byteLength) continue;
+      extraAssets.push({
+        source_path: ref,
+        content_type: guessContentType(ref),
+        bytes,
+        hash: sha256Hex(bytes),
+      });
+      seenAssets.add(ref);
+    } catch {
+      /* missing attachment is not fatal */
+    }
+  }
+  let note =
     conn.source === "siyuan"
       ? normalizeSiyuanNote(payload, conn.id, extraAssets)
       : conn.source === "notion"
@@ -187,6 +518,18 @@ async function processNote(
         : conn.source === "feishu"
           ? normalizeFeishuNote(payload, conn.id, extraAssets)
           : normalizeObsidianNote(payload, conn.id, extraAssets);
+  const assetOnly = isAssetNote(payload);
+  if (assetOnly && extraAssets[0]) {
+    note = { ...note, hash: extraAssets[0].hash, assets: extraAssets };
+    const name = basenameOf(extraAssets[0].source_path);
+    const md = isImagePath(name) ? `# ${name}\n\n![${name}](${name})\n` : `# ${name}\n\n[${name}](${name})\n`;
+    note = { ...note, markdown: md, title: note.title || name };
+  }
+  const sourceUpdatedAt = resolveNoteSourceUpdatedAt({
+    source: conn.source,
+    payload,
+    frontmatter: note.frontmatter,
+  });
 
   const sourceKey = `source/${conn.space_id}/${conn.id}/${payload.path}`;
   const rawBytes = typeof payload.raw === "string" ? new TextEncoder().encode(payload.raw) : payload.raw;
@@ -198,8 +541,20 @@ async function processNote(
   );
   const row = existing.rows[0];
   if (row && row.hash === note.hash && !(await isDeleted(row.id))) {
+    if (extraAssets.length) {
+      const existingAssets = await query<{ n: string }>(
+        "SELECT count(*)::text AS n FROM assets WHERE note_id = $1",
+        [row.id],
+      );
+      if (Number(existingAssets.rows[0]?.n ?? 0) === 0) {
+        await persistAndExtractAssets(row.id, conn.space_id, extraAssets);
+      }
+    }
+    await query("UPDATE notes SET source_updated_at = $2 WHERE id = $1", [row.id, sourceUpdatedAt.toISOString()]);
     await embedNullChunks({ noteId: row.id });
-    return { status: "skip" };
+    await backfillAssetExtracts(row.id, conn.space_id, note.title);
+    const existingChunks = await query<{ n: string }>("SELECT count(*)::text AS n FROM chunks WHERE note_id = $1", [row.id]);
+    return { status: "skip", chunkCount: Number(existingChunks.rows[0]?.n ?? 0) };
   }
 
   const mdBytes = Buffer.byteLength(note.markdown, "utf8");
@@ -207,12 +562,12 @@ async function processNote(
   const dbMarkdown = storage === "s3" ? note.markdown.slice(0, 8192) : note.markdown;
 
   const upsert = await query<{ id: string }>(
-    `INSERT INTO notes (space_id, connection_id, source_id, path, title, markdown, frontmatter, hash, acl_snapshot, storage, deleted_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10,NULL,now())
+    `INSERT INTO notes (space_id, connection_id, source_id, path, title, markdown, frontmatter, hash, acl_snapshot, storage, deleted_at, source_updated_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10,NULL,$11,now())
      ON CONFLICT (connection_id, source_id)
      DO UPDATE SET path = EXCLUDED.path, title = EXCLUDED.title, markdown = EXCLUDED.markdown,
        frontmatter = EXCLUDED.frontmatter, hash = EXCLUDED.hash, storage = EXCLUDED.storage,
-       deleted_at = NULL, updated_at = now()
+       deleted_at = NULL, source_updated_at = EXCLUDED.source_updated_at, updated_at = now()
      RETURNING id`,
     [
       conn.space_id,
@@ -223,8 +578,9 @@ async function processNote(
       dbMarkdown,
       JSON.stringify(note.frontmatter),
       note.hash,
-      JSON.stringify({ visible_in_space: true }),
+      JSON.stringify({ visibility: "space", visible_in_space: true, user_ids: [], roles: [] }),
       storage,
+      sourceUpdatedAt.toISOString(),
     ],
   );
   const noteId = upsert.rows[0].id;
@@ -247,29 +603,28 @@ async function processNote(
   };
   await putHub(`canonical/${conn.space_id}/${noteId}/meta.json`, JSON.stringify(meta, null, 2), "application/json");
 
-  await query("DELETE FROM assets WHERE note_id = $1", [noteId]);
-  for (const a of note.assets) {
-    const name = a.source_path.split("/").pop() ?? a.source_path;
-    const s3Key = `canonical/${conn.space_id}/${noteId}/assets/${name}`;
-    await putHub(s3Key, a.bytes, a.content_type);
-    await query(
-      `INSERT INTO assets (note_id, space_id, source_path, content_type, s3_key, hash, bytes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [noteId, conn.space_id, a.source_path, a.content_type ?? null, s3Key, a.hash, a.bytes.byteLength],
-    );
+  const storedAssets = await persistAndExtractAssets(noteId, conn.space_id, note.assets);
+  if (storedAssets.length) {
+    const extraBlocks = assetExtractBlocks(storedAssets, note.blocks.length);
+    note = { ...note, blocks: [...note.blocks, ...extraBlocks] };
+    if (assetOnly && storedAssets[0]?.text) {
+      const combined = `${note.markdown.trimEnd()}\n\n${storedAssets[0].text}\n`;
+      note = { ...note, markdown: combined };
+      await query("UPDATE notes SET markdown = $2 WHERE id = $1", [noteId, combined.slice(0, 1024 * 1024)]);
+    }
   }
 
   const blockIds = await upsertBlocks(noteId, note);
-  await writeChunks(noteId, conn.space_id, note, blockIds);
+  const chunkCount = await writeChunks(noteId, conn.space_id, note, blockIds);
   await resolveLinks(conn.id, noteId, note);
 
   const html = renderPreviewHtml(note, {
     assetBase: `/v1/notes/${noteId}/assets?path=`,
   });
   await putHub(`preview/${conn.space_id}/${noteId}/${note.hash}.html`, html, "text/html; charset=utf-8");
-  void referencedAssetPaths;
   return {
     status: "upsert",
+    chunkCount,
     note: {
       noteId,
       path: note.path,
@@ -288,17 +643,135 @@ async function isDeleted(id: string): Promise<boolean> {
 
 export type RunSyncOpts = { keys?: string[] };
 
+type Tallies = { upserts: number; deletes: number; skipped: number; failed: number };
+
+async function writeSyncProgress(
+  runId: string,
+  progress: SyncProgress,
+  tallies?: Tallies,
+  opts?: { finished?: boolean; cursorAfter?: Record<string, unknown> | null },
+): Promise<void> {
+  const finished = Boolean(opts?.finished);
+  const cursorAfter = opts?.cursorAfter;
+  const upserts = tallies?.upserts ?? 0;
+  const deletes = tallies?.deletes ?? 0;
+  const skipped = tallies?.skipped ?? 0;
+  const failed = tallies?.failed ?? 0;
+  if (finished && cursorAfter !== undefined) {
+    await query(
+      `UPDATE sync_run SET finished_at = now(), upserts = $2, deletes = $3, skipped = $4, failed = $5,
+         files_total = $6, files_done = $7, chunks_total = $8, chunks_done = $9, cursor_after = $10::jsonb
+       WHERE id = $1`,
+      [
+        runId,
+        upserts,
+        deletes,
+        skipped,
+        failed,
+        progress.filesTotal,
+        progress.filesDone,
+        progress.chunksTotal,
+        progress.chunksDone,
+        cursorAfter ? JSON.stringify(cursorAfter) : null,
+      ],
+    );
+    return;
+  }
+  if (finished) {
+    await query(
+      `UPDATE sync_run SET finished_at = now(), upserts = $2, deletes = $3, skipped = $4, failed = $5,
+         files_total = $6, files_done = $7, chunks_total = $8, chunks_done = $9
+       WHERE id = $1`,
+      [
+        runId,
+        upserts,
+        deletes,
+        skipped,
+        failed,
+        progress.filesTotal,
+        progress.filesDone,
+        progress.chunksTotal,
+        progress.chunksDone,
+      ],
+    );
+    return;
+  }
+  await query(
+    `UPDATE sync_run SET upserts = $2, deletes = $3, skipped = $4, failed = $5,
+       files_total = $6, files_done = $7, chunks_total = $8, chunks_done = $9
+     WHERE id = $1`,
+    [
+      runId,
+      upserts,
+      deletes,
+      skipped,
+      failed,
+      progress.filesTotal,
+      progress.filesDone,
+      progress.chunksTotal,
+      progress.chunksDone,
+    ],
+  );
+}
+
+function createProgressWriter(runId: string, tallies: Tallies) {
+  let lastFlushAt = 0;
+  let filesSinceFlush = 0;
+  return {
+    async persist(progress: SyncProgress): Promise<void> {
+      await writeSyncProgress(runId, progress, tallies);
+      lastFlushAt = Date.now();
+      filesSinceFlush = 0;
+    },
+    async afterFile(progress: SyncProgress): Promise<void> {
+      filesSinceFlush++;
+      const now = Date.now();
+      if (shouldFlushProgress(filesSinceFlush, lastFlushAt, now)) {
+        await writeSyncProgress(runId, progress, tallies);
+        lastFlushAt = now;
+        filesSinceFlush = 0;
+      }
+    },
+    async finish(progress: SyncProgress, cursorAfter?: Record<string, unknown> | null): Promise<void> {
+      await writeSyncProgress(runId, progress, tallies, { finished: true, cursorAfter });
+    },
+  };
+}
+
 export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Promise<void> {
   const r = await query("SELECT * FROM connections WHERE id = $1", [connectionId]);
   const conn = r.rows[0] as ConnectionRecord | undefined;
   if (!conn) throw new Error("connection not found");
+
+  const earlier = await query<{ id: string }>(
+    `SELECT id FROM sync_run
+     WHERE connection_id = $1 AND finished_at IS NULL
+     ORDER BY started_at ASC
+     LIMIT 1`,
+    [connectionId],
+  );
+  if (earlier.rows[0]) return;
 
   const run = await query<{ id: string }>(
     `INSERT INTO sync_run (connection_id, cursor_before) VALUES ($1, $2) RETURNING id`,
     [connectionId, conn.cursor ? JSON.stringify(conn.cursor) : null],
   );
   const runId = run.rows[0].id;
-  let upserts = 0, deletes = 0, skipped = 0, failed = 0;
+  const raced = await query<{ id: string }>(
+    `SELECT id FROM sync_run
+     WHERE connection_id = $1 AND finished_at IS NULL AND id <> $2
+       AND started_at <= (SELECT started_at FROM sync_run WHERE id = $2)
+     ORDER BY started_at ASC, id ASC
+     LIMIT 1`,
+    [connectionId, runId],
+  );
+  if (raced.rows[0]) {
+    await query(`UPDATE sync_run SET finished_at = now() WHERE id = $1 AND finished_at IS NULL`, [runId]);
+    return;
+  }
+  const tallies: Tallies = { upserts: 0, deletes: 0, skipped: 0, failed: 0 };
+  const progress: SyncProgress = { filesTotal: 0, filesDone: 0, chunksTotal: 0, chunksDone: 0 };
+  const writer = createProgressWriter(runId, tallies);
 
   const log = async (sourceId: string | null, noteId: string | null, level: string, message: string) => {
     await query(
@@ -314,16 +787,25 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
         [connectionId, "e2ee=true"],
       );
       await log(null, null, "warn", "e2ee=true; skip bodies");
-      await query(
-        "UPDATE sync_run SET finished_at = now(), skipped = 0 WHERE id = $1",
-        [runId],
-      );
+      await writer.finish(progress);
       return;
     }
 
     const secrets = await loadSecrets(conn);
     const adapter = createAdapter(conn.source);
-    const ctx = { connection: conn, secrets, cursor: conn.cursor };
+    const ctx = {
+      connection: conn,
+      secrets,
+      cursor: conn.cursor,
+      persistSecrets: async (next: ConnectionSecrets) => {
+        const blob = encryptSecret(JSON.stringify(next), env.hubSecret);
+        const s = await query<{ id: string }>("INSERT INTO secrets (ciphertext) VALUES ($1) RETURNING id", [blob]);
+        await query("UPDATE connections SET secrets_ref = $2, updated_at = now() WHERE id = $1", [
+          connectionId,
+          s.rows[0].id,
+        ]);
+      },
+    };
     const probe = await adapter.probe(ctx);
     if (!probe.ok) {
       const status = probe.status ?? "error";
@@ -339,31 +821,27 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
 
     const fileKeys = (opts.keys ?? []).map(decodeObjectKey).filter(Boolean);
     if (fileKeys.length) {
-      const tallies = { upserts: 0, deletes: 0, skipped: 0, failed: 0 };
       const upsertedNotes: UpsertedNote[] = [];
-      await ingestFileKeys(conn, adapter, ctx, fileKeys, log, tallies, upsertedNotes);
-      upserts = tallies.upserts;
-      deletes = tallies.deletes;
-      skipped = tallies.skipped;
-      failed = tallies.failed;
+      await ingestFileKeys(conn, adapter, ctx, fileKeys, log, tallies, upsertedNotes, progress, writer);
       await query(
         "UPDATE connections SET last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now() WHERE id = $1",
         [connectionId],
       );
-      await query(
-        `UPDATE sync_run SET finished_at = now(), upserts = $2, deletes = $3, skipped = $4, failed = $5 WHERE id = $1`,
-        [runId, upserts, deletes, skipped, failed],
-      );
+      await writer.finish(progress);
       console.log(
         JSON.stringify({
           level: "info",
           job_id: `syncfile-${connectionId}`,
           connection_id: connectionId,
           keys: fileKeys.length,
-          upserts,
-          deletes,
-          skipped,
-          failed,
+          upserts: tallies.upserts,
+          deletes: tallies.deletes,
+          skipped: tallies.skipped,
+          failed: tallies.failed,
+          files_total: progress.filesTotal,
+          files_done: progress.filesDone,
+          chunks_total: progress.chunksTotal,
+          chunks_done: progress.chunksDone,
         }),
       );
       await embedNullChunks({ connectionId: conn.id });
@@ -380,9 +858,24 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
     }
 
     const { changes, nextCursor } = await adapter.listChanges(ctx);
+    const cursor = nextCursor as Record<string, unknown>;
+    ctx.cursor = { ...((ctx.cursor ?? {}) as Record<string, unknown>), ...cursor };
+    await persistCursorMeta(connectionId, cursor);
 
     const deletesList = changes.filter((ch) => ch.type === "delete");
     const upsertsList = changes.filter((ch) => ch.type === "upsert");
+
+    progress.filesTotal = upsertsList.length;
+    const chunkCounts: Record<string, number | undefined> = {};
+    for (const ch of upsertsList) {
+      if (typeof ch.chunk_count === "number") chunkCounts[ch.source_id] = ch.chunk_count;
+    }
+    progress.chunksTotal = sumChunksTotal(
+      upsertsList.map((ch) => ch.source_id),
+      cursor,
+      chunkCounts,
+    );
+    await writer.persist(progress);
 
     for (const ch of deletesList) {
       try {
@@ -390,49 +883,77 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
           "UPDATE notes SET deleted_at = now(), updated_at = now() WHERE connection_id = $1 AND source_id = $2 AND deleted_at IS NULL",
           [conn.id, ch.source_id],
         );
-        deletes++;
+        tallies.deletes++;
+        await mergeCursorEtag(connectionId, ch.source_id, null);
       } catch (e) {
-        failed++;
+        tallies.failed++;
         await log(ch.source_id, null, "error", e instanceof Error ? e.message : String(e));
       }
     }
 
     const upsertedNotes: UpsertedNote[] = [];
-    for (const ch of upsertsList) {
-      if (conn.source === "obsidian" && (!ch.path || !isMarkdownPath(ch.path))) continue;
+    const lock = createMutex();
+    await mapPool(upsertsList, UPSERT_CONCURRENCY, async (ch) => {
       try {
         const result = await processNote(conn, adapter, ctx, ch.source_id, ch.path ?? ch.source_id);
-        if (result.status === "upsert") {
-          upserts++;
-          upsertedNotes.push(result.note);
-        } else if (result.status === "skip") skipped++;
-        else deletes++;
+        await lock.run(async () => {
+          if (result.status === "upsert") {
+            tallies.upserts++;
+            upsertedNotes.push(result.note);
+          } else if (result.status === "skip") tallies.skipped++;
+          else tallies.deletes++;
+          progress.chunksDone += fileChunkCount(ch.source_id, {
+            cursor,
+            chunkCount: ch.chunk_count,
+            processed: result.chunkCount,
+          });
+          const etag = ch.etag ?? (typeof cursor.etags === "object" && cursor.etags && !Array.isArray(cursor.etags)
+            ? (cursor.etags as Record<string, string>)[ch.source_id]
+            : undefined);
+          if (etag) await mergeCursorEtag(connectionId, ch.source_id, etag);
+          progress.filesDone++;
+          await writer.afterFile(progress);
+        });
       } catch (e) {
-        failed++;
-        await log(ch.source_id, null, "error", e instanceof Error ? e.message : String(e));
+        await lock.run(async () => {
+          tallies.failed++;
+          await log(ch.source_id, null, "error", e instanceof Error ? e.message : String(e));
+          progress.filesDone++;
+          await writer.afterFile(progress);
+        });
       }
-    }
+    });
 
     await query(
-      "UPDATE connections SET cursor = $2::jsonb, last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now() WHERE id = $1",
-      [connectionId, JSON.stringify(nextCursor)],
+      "UPDATE connections SET last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now() WHERE id = $1",
+      [connectionId],
     );
-    await query(
-      `UPDATE sync_run SET finished_at = now(), upserts = $2, deletes = $3, skipped = $4, failed = $5, cursor_after = $6::jsonb WHERE id = $1`,
-      [runId, upserts, deletes, skipped, failed, JSON.stringify(nextCursor)],
-    );
+    await writer.finish(progress, cursor);
     console.log(
       JSON.stringify({
         level: "info",
         job_id: `sync:${connectionId}`,
         connection_id: connectionId,
-        upserts,
-        deletes,
-        skipped,
-        failed,
+        upserts: tallies.upserts,
+        deletes: tallies.deletes,
+        skipped: tallies.skipped,
+        failed: tallies.failed,
+        files_total: progress.filesTotal,
+        files_done: progress.filesDone,
+        chunks_total: progress.chunksTotal,
+        chunks_done: progress.chunksDone,
       }),
     );
     await embedNullChunks({ connectionId: conn.id });
+    if (conn.source === "feishu" && !(opts.keys && opts.keys.length)) {
+      try {
+        await runContactsSync(connectionId);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(JSON.stringify({ level: "error", message: "feishu contacts sync failed", connection_id: connectionId, error: msg }));
+        await log(null, null, "warn", "contacts sync: " + msg);
+      }
+    }
     if (upsertedNotes.length) {
       try {
         await runPostSyncGrowth(conn.space_id, upsertedNotes);
@@ -445,10 +966,7 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const last = isHubError(e) ? `${e.code}: ${e.message}` : message;
-    await query(
-      `UPDATE sync_run SET finished_at = now(), upserts = $2, deletes = $3, skipped = $4, failed = $5 WHERE id = $1`,
-      [runId, upserts, deletes, skipped, failed],
-    );
+    await writer.finish(progress);
     await query(
       "UPDATE connections SET last_error = $2, status = 'error', updated_at = now() WHERE id = $1",
       [connectionId, last],
@@ -471,8 +989,6 @@ async function siyuanBoxEncrypted(adapter: Adapter, ctx: AdapterContext, boxId: 
   }
 }
 
-type Tallies = { upserts: number; deletes: number; skipped: number; failed: number };
-
 async function applyNote(
   conn: ConnectionRecord,
   adapter: Adapter,
@@ -482,7 +998,7 @@ async function applyNote(
   log: (sourceId: string | null, noteId: string | null, level: string, message: string) => Promise<void>,
   tallies: Tallies,
   upsertedNotes: UpsertedNote[],
-): Promise<void> {
+): Promise<number> {
   try {
     const result = await processNote(conn, adapter, ctx, sourceId, path);
     if (result.status === "upsert") {
@@ -490,9 +1006,11 @@ async function applyNote(
       upsertedNotes.push(result.note);
     } else if (result.status === "skip") tallies.skipped++;
     else tallies.deletes++;
+    return result.chunkCount;
   } catch (e) {
     tallies.failed++;
     await log(sourceId, null, "error", e instanceof Error ? e.message : String(e));
+    return 0;
   }
 }
 
@@ -522,6 +1040,8 @@ async function referringNotes(connectionId: string, assetPath: string): Promise<
   return out;
 }
 
+type ProgressWriter = ReturnType<typeof createProgressWriter>;
+
 async function ingestFileKeys(
   conn: ConnectionRecord,
   adapter: Adapter,
@@ -530,33 +1050,49 @@ async function ingestFileKeys(
   log: (sourceId: string | null, noteId: string | null, level: string, message: string) => Promise<void>,
   tallies: Tallies,
   upsertedNotes: UpsertedNote[],
+  progress: SyncProgress,
+  writer: ProgressWriter,
 ): Promise<void> {
+  progress.filesTotal = keys.length;
+  progress.chunksTotal = 0;
+  await writer.persist(progress);
+  const cursor = (baseCtx.cursor ?? conn.cursor) as Record<string, unknown> | null;
+
   for (const key of keys) {
     const mapped = mapConnectionObjectKey(conn, key);
     if (!mapped || mapped.kind === "skip") {
       tallies.skipped++;
+      progress.filesDone++;
+      await writer.afterFile(progress);
       continue;
     }
     if (conn.source === "siyuan" && mapped.boxId) {
       if (await siyuanBoxEncrypted(adapter, baseCtx, mapped.boxId)) {
         tallies.skipped++;
         await log(mapped.source_id, null, "warn", "encrypted notebook skipped");
+        progress.filesDone++;
+        await writer.afterFile(progress);
         continue;
       }
     }
     const ctx: AdapterContext = { ...baseCtx, objectKey: mapped.objectKey };
     if (mapped.kind === "asset") {
+      const processedAsset = await applyNote(conn, adapter, ctx, mapped.source_id, mapped.path, log, tallies, upsertedNotes);
+      progress.chunksDone += fileChunkCount(mapped.source_id, { cursor, processed: processedAsset });
       const refs = await referringNotes(conn.id, mapped.path);
-      if (!refs.length) {
-        tallies.skipped++;
-        continue;
-      }
       for (const n of refs) {
-        await applyNote(conn, adapter, ctx, n.source_id, n.path, log, tallies, upsertedNotes);
+        if (n.source_id === mapped.source_id) continue;
+        const processed = await applyNote(conn, adapter, ctx, n.source_id, n.path, log, tallies, upsertedNotes);
+        progress.chunksDone += fileChunkCount(n.source_id, { cursor, processed });
       }
+      progress.filesDone++;
+      await writer.afterFile(progress);
       continue;
     }
-    await applyNote(conn, adapter, ctx, mapped.source_id, mapped.path, log, tallies, upsertedNotes);
+    const processed = await applyNote(conn, adapter, ctx, mapped.source_id, mapped.path, log, tallies, upsertedNotes);
+    progress.chunksDone += fileChunkCount(mapped.source_id, { cursor, processed });
+    progress.filesDone++;
+    await writer.afterFile(progress);
   }
 }
 

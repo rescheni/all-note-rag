@@ -36,6 +36,7 @@ export {
   LOCAL_EMBEDDING_MODEL,
   DEFAULT_EMBEDDING_MODEL,
   type EmbedTextsOpts,
+  type EmbedEndpoint,
 } from "./embed.ts";
 
 export {
