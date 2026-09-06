@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFileTree, expandTreeLevels, isAssetNoteId } from "../src/tree.ts";
+import { assembleSourceTree, buildFileTree, buildSourceGroups, clipTreeToDepth, expandTreeLevels, isAssetNoteId } from "../src/tree.ts";
 
 describe("isAssetNoteId", () => {
   it("matches SiYuan asset-note source ids", () => {
@@ -218,11 +218,11 @@ describe("buildFileTree", () => {
         boxNamesByConnection: { "c-sy": { "20241211071716-w11cbza": "生活" } },
       },
     );
-    const names = tree.map((n) => n.name).sort();
-    expect(names).toEqual(["Notion", "Obsidian", "我的思源", "飞书"].sort());
-    const sy = tree.find((n) => n.name === "我的思源");
+    const names = tree.map((n) => n.name);
+    expect(names).toEqual(["飞书", "Notion", "思源", "Obsidian"]);
+    const sy = tree.find((n) => n.name === "思源");
     expect(sy?.kind).toBe("folder");
-    expect(sy?.path).toBe("conn:c-sy");
+    expect(sy?.path).toBe("src:siyuan");
     expect(sy?.children?.[0]?.name).toBe("生活");
     expect(sy?.children?.[0]?.children?.[0]?.name).toBe("文档");
     const ob = tree.find((n) => n.name === "Obsidian");
@@ -242,7 +242,7 @@ describe("buildFileTree", () => {
       { groupBySource: true },
     );
     const open = expandTreeLevels(tree, 2);
-    expect(open.has("conn:c1")).toBe(true);
+    expect(open.has("src:_")).toBe(true);
     expect(open.has("A")).toBe(true);
     expect(open.has("A/B")).toBe(false);
   });
@@ -256,7 +256,7 @@ describe("buildFileTree", () => {
       { groupBySource: true },
     );
     const open = expandTreeLevels(tree, 2);
-    expect(open.has("conn:c1")).toBe(true);
+    expect(open.has("src:_")).toBe(true);
     expect(open.has("Daily")).toBe(true);
     expect(open.has("inbox")).toBe(true);
     const withAssets = [
@@ -413,7 +413,7 @@ describe("buildFileTree", () => {
     ];
     const tree = buildFileTree(items, { groupBySource: true, boxNamesByConnection: { "c-sy": boxNames } });
     expect(tree.length).toBeGreaterThan(0);
-    const sy = tree.find((n) => n.name === "我的思源");
+    const sy = tree.find((n) => n.name === "思源");
     expect(sy).toBeTruthy();
     const names = (sy?.children ?? []).map((c) => c.name).sort();
     expect(names).not.toHaveLength(0);
@@ -457,5 +457,127 @@ describe("buildFileTree", () => {
     );
     expect(tree.map((n) => n.name).sort()).toEqual(["only code", "面试"].sort());
     expect(tree.some((n) => n.name === "assets")).toBe(false);
+  });
+});
+
+describe("buildSourceGroups", () => {
+  it("returns one group per connection with source labels", () => {
+    const groups = buildSourceGroups(
+      [
+        {
+          path: "Daily/a.md",
+          kind: "note",
+          note_id: "o1",
+          title: "日记",
+          source: "obsidian",
+          connection_id: "c-ob",
+          connection_name: "Obsidian",
+        },
+        {
+          path: "20241211071716-w11cbza/doc.sy",
+          kind: "note",
+          note_id: "s1",
+          title: "文档",
+          source: "siyuan",
+          connection_id: "c-sy",
+          connection_name: "我的思源",
+        },
+      ],
+      { boxNamesByConnection: { "c-sy": { "20241211071716-w11cbza": "生活" } } },
+    );
+    expect(groups.map((g) => g.source)).toEqual(["siyuan", "obsidian"]);
+    expect(groups[0]).toMatchObject({ source: "siyuan", connection_id: "c-sy", name: "我的思源" });
+    expect(groups[0]?.tree[0]?.name).toBe("生活");
+    expect(groups[1]).toMatchObject({ source: "obsidian", connection_id: "c-ob", name: "Obsidian" });
+  });
+
+  it("keeps empty connected sources so Feishu stays visible", () => {
+    const groups = buildSourceGroups(
+      [
+        {
+          path: "Daily/a.md",
+          kind: "note",
+          note_id: "o1",
+          title: "日记",
+          source: "obsidian",
+          connection_id: "c-ob",
+          connection_name: "库",
+        },
+      ],
+      {
+        connections: [
+          { id: "c-ob", source: "obsidian", name: "库" },
+          { id: "c-fs", source: "feishu", name: "飞书" },
+        ],
+      },
+    );
+    expect(groups.map((g) => g.source)).toEqual(["feishu", "obsidian"]);
+    const fs = groups.find((g) => g.source === "feishu");
+    expect(fs?.connection_id).toBe("c-fs");
+    expect(fs?.tree).toEqual([]);
+  });
+
+  it("nests connection names under a source only when there are several", () => {
+    const groups = buildSourceGroups(
+      [
+        { path: "A/a.md", kind: "note", note_id: "a", title: "A", source: "siyuan", connection_id: "c1", connection_name: "家" },
+        { path: "B/b.md", kind: "note", note_id: "b", title: "B", source: "siyuan", connection_id: "c2", connection_name: "工" },
+      ],
+    );
+    const tree = assembleSourceTree(groups);
+    expect(tree).toHaveLength(1);
+    expect(tree[0]?.name).toBe("思源");
+    expect(tree[0]?.children?.map((c) => c.name).sort()).toEqual(["家", "工"].sort());
+    expect(tree[0]?.children?.[0]?.path.startsWith("conn:")).toBe(true);
+  });
+
+  it("clipDepth builds only first-level folders without deep children", () => {
+    const tree = buildFileTree(
+      [
+        {
+          path: "生活/父文档/子文档.md",
+          kind: "note",
+          note_id: "n1",
+          title: "子文档",
+          source: "obsidian",
+          connection_id: "c-ob",
+        },
+        {
+          path: "工作/周报.md",
+          kind: "note",
+          note_id: "n2",
+          title: "周报",
+          source: "obsidian",
+          connection_id: "c-ob",
+        },
+      ],
+      { clipDepth: 1 },
+    );
+    expect(tree.map((n) => n.name).sort()).toEqual(["工作", "生活"].sort());
+    expect(tree.every((n) => n.children === undefined || n.children.length === 0 || n.has_children)).toBe(true);
+    expect(JSON.stringify(tree).includes("子文档")).toBe(false);
+    expect(JSON.stringify(tree).includes("周报")).toBe(false);
+    expect(tree.find((n) => n.name === "生活")?.has_children).toBe(true);
+  });
+
+    it("clips to first-level notebooks and marks has_children", () => {
+    const groups = buildSourceGroups(
+      [
+        {
+          path: "生活/父文档/子文档.md",
+          kind: "note",
+          note_id: "n1",
+          title: "子文档",
+          source: "obsidian",
+          connection_id: "c-ob",
+          connection_name: "Obsidian",
+        },
+      ],
+    );
+    const clipped = clipTreeToDepth(groups[0]!.tree, 1);
+    expect(clipped.map((n) => n.name)).toEqual(["生活"]);
+    expect(clipped[0]?.has_children).toBe(true);
+    expect(clipped[0]?.children).toBeUndefined();
+    expect(JSON.stringify(clipped).includes("子文档")).toBe(false);
   });
 });

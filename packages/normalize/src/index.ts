@@ -14,6 +14,7 @@ export {
   notionBlocksToMarkdown,
   notionDatabaseToMarkdown,
   normalizeNotionNote,
+  applyNotionPageIcon,
   richTextToMarkdown,
 } from "./notion.ts";
 export { feishuBlocksToMarkdown, normalizeFeishuNote, feishuMediaRefs } from "./feishu.ts";

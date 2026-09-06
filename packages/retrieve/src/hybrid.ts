@@ -7,6 +7,8 @@ export type RetrieveChunk = {
   note_id: string;
   title: string;
   space_id: string;
+  path?: string;
+  connection_id?: string;
   text: string;
   heading_path?: string | null;
   block_id?: string | null;
@@ -18,6 +20,8 @@ export type RetrieveHit = {
   note_id: string;
   title: string;
   space_id: string;
+  path: string;
+  connection_id: string;
   block_id: string;
   source_block_id: string;
   text: string;
@@ -68,7 +72,13 @@ export function previewUrl(noteId: string, sourceBlockId?: string | null): strin
 }
 
 export function clipQuote(text: string, max = 200): string {
-  const t = text.replace(/\s+/g, " ").trim();
+  const t = text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/[^\s)\]]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return "";
   if (t.length <= max) return t;
   return t.slice(0, max).trimEnd() + "…";
 }
@@ -105,6 +115,8 @@ function chunkToHit(ch: RetrieveChunk, rank: number): RetrieveHit {
     note_id: ch.note_id,
     title: ch.title,
     space_id: ch.space_id,
+    path: ch.path ?? "",
+    connection_id: ch.connection_id ?? "",
     block_id: blockId,
     source_block_id: sourceBlockId,
     text: ch.text,
@@ -217,6 +229,8 @@ type SqlRow = {
   note_id: string;
   title: string;
   space_id: string;
+  path: string | null;
+  connection_id: string | null;
   text: string;
   heading_path: string | null;
   block_uuid: string | null;
@@ -229,6 +243,8 @@ function mapSqlRows(rows: SqlRow[]): RetrieveChunk[] {
     note_id: String(row.note_id),
     title: String(row.title ?? ""),
     space_id: String(row.space_id),
+    path: String(row.path ?? ""),
+    connection_id: String(row.connection_id ?? ""),
     text: String(row.text ?? ""),
     heading_path: row.heading_path,
     block_id: row.block_uuid,
@@ -248,7 +264,7 @@ export function loadChunksViaSql(run: SqlQuery): LoadChunks {
     const userId = opts?.userId ?? null;
     const role = opts?.role ?? null;
     const r = await run(
-      `SELECT n.id AS note_id, n.title, n.space_id, ch.text, ch.heading_path,
+      `SELECT n.id AS note_id, n.title, n.space_id, n.path, n.connection_id, ch.text, ch.heading_path,
               b.id AS block_uuid, b.source_block_id, ch.embedding
        FROM chunks ch
        INNER JOIN notes n ON n.id = ch.note_id AND n.deleted_at IS NULL
@@ -283,7 +299,7 @@ export function loadVectorChunksViaSql(run: SqlQuery): LoadVectorChunks {
     const userId = opts?.userId ?? null;
     const role = opts?.role ?? null;
     const r = await run(
-      `SELECT n.id AS note_id, n.title, n.space_id, ch.text, ch.heading_path,
+      `SELECT n.id AS note_id, n.title, n.space_id, n.path, n.connection_id, ch.text, ch.heading_path,
               b.id AS block_uuid, b.source_block_id, ch.embedding
        FROM chunks ch
        INNER JOIN notes n ON n.id = ch.note_id AND n.deleted_at IS NULL

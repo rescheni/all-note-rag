@@ -17,6 +17,9 @@ x-app-env: &app-env
   NOTION_CLIENT_ID: ${NOTION_CLIENT_ID:-}
   NOTION_CLIENT_SECRET: ${NOTION_CLIENT_SECRET:-}
   NOTION_REDIRECT_URI: ${NOTION_REDIRECT_URI:-http://127.0.0.1:3000/v1/connections/oauth/notion/callback}
+  FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+  FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+  FEISHU_REDIRECT_URI: ${FEISHU_REDIRECT_URI:-http://127.0.0.1:3000/v1/connections/oauth/feishu/callback}
 
 services:
   postgres:

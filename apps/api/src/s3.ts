@@ -1,5 +1,6 @@
 import {
   CreateBucketCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
@@ -49,4 +50,33 @@ export async function getObjectBytes(key: string): Promise<Uint8Array | null> {
 export async function getObjectText(key: string): Promise<string | null> {
   const b = await getObjectBytes(key);
   return b ? new TextDecoder().decode(b) : null;
+}
+
+/** Objects per DeleteObjects call (S3 / MinIO hard limit is 1000). */
+const DELETE_BATCH = 1000;
+
+/**
+ * Batch-delete objects from the hub bucket. Never throws: a partial failure is
+ * reported in `failed` so callers (e.g. deleting a connection) can log and move on.
+ */
+export async function deleteHubObjects(keys: string[]): Promise<{ deleted: number; failed: number }> {
+  let deleted = 0;
+  let failed = 0;
+  for (let i = 0; i < keys.length; i += DELETE_BATCH) {
+    const batch = keys.slice(i, i + DELETE_BATCH);
+    try {
+      const res = await hubS3.send(
+        new DeleteObjectsCommand({
+          Bucket: env.s3Bucket,
+          Delete: { Objects: batch.map((Key) => ({ Key })), Quiet: true },
+        }),
+      );
+      const errs = res.Errors?.length ?? 0;
+      failed += errs;
+      deleted += batch.length - errs;
+    } catch {
+      failed += batch.length;
+    }
+  }
+  return { deleted, failed };
 }

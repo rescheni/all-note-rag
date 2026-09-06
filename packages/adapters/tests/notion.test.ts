@@ -217,3 +217,174 @@ describe("notion adapter oauth token", () => {
     expect(JSON.stringify(calls.map((x) => x.auth))).not.toContain("csecret");
   });
 });
+
+describe("notion media asset ingestion", () => {
+  const MEDIA_PAGE = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+  const MEDIA_HEX = MEDIA_PAGE.replace(/-/g, "");
+
+  const mediaPage = {
+    object: "page",
+    id: MEDIA_PAGE,
+    last_edited_time: "2026-08-31T12:00:00.000Z",
+    archived: false,
+    properties: titleProp("Media"),
+  };
+
+  const mediaBlocks = {
+    object: "list",
+    has_more: false,
+    next_cursor: null,
+    results: [
+      {
+        object: "block",
+        id: "aaaa1111-1111-1111-1111-111111111111",
+        type: "video",
+        has_children: false,
+        video: { type: "file", file: { url: "https://files.notion.example/clip.mp4?sig=1" } },
+      },
+      {
+        object: "block",
+        id: "bbbb2222-2222-2222-2222-222222222222",
+        type: "audio",
+        has_children: false,
+        audio: { type: "external", external: { url: "https://cdn.example.com/voice.mp3" } },
+      },
+      {
+        object: "block",
+        id: "cccc3333-3333-3333-3333-333333333333",
+        type: "video",
+        has_children: false,
+        video: { type: "external", external: { url: "https://www.youtube.com/watch?v=abc123" } },
+      },
+      {
+        object: "block",
+        id: "dddd4444-4444-4444-4444-444444444444",
+        type: "audio",
+        has_children: false,
+        audio: { type: "external", external: { url: "https://cdn.example.com/missing.mp3" } },
+      },
+      {
+        object: "block",
+        id: "eeee5555-5555-5555-5555-555555555555",
+        type: "embed",
+        has_children: false,
+        embed: { url: "https://example.com/board" },
+      },
+    ],
+  };
+
+  function mediaFetch(): typeof fetch {
+    const fetchFn: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.endsWith("/v1/users/me")) {
+        return new Response(JSON.stringify({ object: "user", id: "u1" }), { status: 200 });
+      }
+      if (url.includes("/v1/pages/")) return new Response(JSON.stringify(mediaPage), { status: 200 });
+      if (url.includes("/v1/blocks/") && url.includes("/children")) {
+        return new Response(JSON.stringify(mediaBlocks), { status: 200 });
+      }
+      if (url.startsWith("https://files.notion.example/clip.mp4")) {
+        return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        });
+      }
+      if (url.startsWith("https://cdn.example.com/voice.mp3")) {
+        return new Response(new Uint8Array([73, 68, 51, 4]), {
+          status: 200,
+          headers: { "content-type": "audio/mpeg" },
+        });
+      }
+      // A YouTube watch page is a page, not a media file.
+      if (url.startsWith("https://www.youtube.com/watch")) {
+        return new Response("<!DOCTYPE html><html><body>yt</body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+      // A 404 attachment must not fail the note.
+      if (url.startsWith("https://cdn.example.com/missing.mp3")) {
+        return new Response("nope", { status: 404 });
+      }
+      throw new Error(`unexpected url ${url}`);
+    };
+    return fetchFn;
+  }
+
+  it("downloads video + audio into assets and links them from the markdown", async () => {
+    const adapter = new NotionAdapter(mediaFetch());
+    const note = await adapter.fetchNote(ctx(), MEDIA_HEX);
+    expect(note).not.toBeNull();
+
+    const names = (note!.assets ?? []).map((a) => a.path).sort();
+    expect(names).toEqual(["clip.mp4", "voice.mp3"]);
+
+    const md = String(note!.raw);
+    // Signed/external urls were swapped for the stored asset names.
+    expect(md).toContain('<video controls src="clip.mp4"></video>');
+    expect(md).toContain('<audio controls src="voice.mp3"></audio>');
+    // Non-downloadable references still survive as links.
+    expect(md).toContain("https://www.youtube.com/watch?v=abc123");
+    expect(md).toContain("https://example.com/board");
+  });
+
+  it("a 404 / html-page media block is skipped, not fatal", async () => {
+    const adapter = new NotionAdapter(mediaFetch());
+    const note = await adapter.fetchNote(ctx(), MEDIA_HEX);
+    expect(note).not.toBeNull();
+    const names = (note!.assets ?? []).map((a) => a.path);
+    expect(names).not.toContain("missing.mp3");
+    expect(names).not.toContain("watch");
+  });
+});
+
+describe("notion hierarchy paths", () => {
+  it("walks page/database parents, caches ancestors, escapes title slashes, and tolerates inaccessible parents", async () => {
+    const ROOT = "11111111-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const DB = "22222222-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const CHILD = "33333333-cccc-cccc-cccc-cccccccccccc";
+    const MISSING_PARENT = "44444444-dddd-dddd-dddd-dddddddddddd";
+    const ORPHAN = "55555555-eeee-eeee-eeee-eeeeeeeeeeee";
+    const calls = new Map<string, number>();
+    const objects: Record<string, Record<string, unknown>> = {
+      [ROOT.replaceAll("-", "")]: { object: "page", id: ROOT, parent: { type: "workspace", workspace: true }, properties: titleProp("示例知识库 / Wiki samples") },
+      [DB.replaceAll("-", "")]: { object: "database", id: DB, parent: { type: "page_id", page_id: ROOT }, title: [{ plain_text: "Projects" }] },
+      [CHILD.replaceAll("-", "")]: { object: "page", id: CHILD, parent: { type: "database_id", database_id: DB }, properties: titleProp("API / Design") },
+      [ORPHAN.replaceAll("-", "")]: { object: "page", id: ORPHAN, parent: { type: "page_id", page_id: MISSING_PARENT }, properties: titleProp("Still here") },
+    };
+    const fetchFn: typeof fetch = async (input) => {
+      const url = String(input);
+      const id = url.split("/").pop() ?? "";
+      calls.set(url, (calls.get(url) ?? 0) + 1);
+      if (url.includes("/databases/")) {
+        const obj = objects[id];
+        return new Response(JSON.stringify(obj ?? { object: "error" }), { status: obj?.object === "database" ? 200 : 404 });
+      }
+      if (url.includes("/pages/")) {
+        const obj = objects[id];
+        return new Response(JSON.stringify(obj ?? { object: "error" }), { status: obj?.object === "page" ? 200 : 404 });
+      }
+      throw new Error(`unexpected ${url}`);
+    };
+    const adapter = new NotionAdapter(fetchFn);
+    const childPath = await adapter.resolvePath(ctx(), CHILD);
+    expect(childPath).toBe("n/示例知识库 ／ Wiki samples/Projects/API ／ Design");
+    expect(await adapter.resolvePath(ctx(), CHILD)).toBe(childPath);
+    expect([...calls.entries()].filter(([url]) => url.includes(ROOT.replaceAll("-", "")))).toHaveLength(1);
+    expect(await adapter.resolvePath(ctx(), ORPHAN)).toBe("[无法访问的页面-44444444]/Still here");
+  });
+
+  it("guards parent cycles", async () => {
+    const A = "66666666-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const B = "77777777-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const objects: Record<string, Record<string, unknown>> = {
+      [A.replaceAll("-", "")]: { object: "page", id: A, parent: { type: "page_id", page_id: B }, properties: titleProp("A") },
+      [B.replaceAll("-", "")]: { object: "page", id: B, parent: { type: "page_id", page_id: A }, properties: titleProp("B") },
+    };
+    const fetchFn: typeof fetch = async (input) => {
+      const obj = objects[String(input).split("/").pop() ?? ""];
+      return new Response(JSON.stringify(obj ?? { object: "error" }), { status: obj ? 200 : 404 });
+    };
+    expect(await new NotionAdapter(fetchFn).resolvePath(ctx(), A)).toBe("[无法访问的循环父级-66666666]/B/A");
+  });
+});

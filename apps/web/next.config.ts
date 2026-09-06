@@ -7,6 +7,7 @@ const api = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3001").replace
 
 const config: NextConfig = {
   output: "standalone",
+  transpilePackages: ["motion"],
   outputFileTracingRoot: path.join(dir, "../.."),
   async rewrites() {
     return [{ source: "/v1/:path*", destination: `${api}/v1/:path*` }];

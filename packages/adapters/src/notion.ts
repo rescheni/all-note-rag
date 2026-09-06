@@ -20,12 +20,34 @@ export type NotionOAuthClient = { clientId: string; clientSecret: string };
 
 const NOTION_VERSION = "2022-06-28";
 const NOTION_API = "https://api.notion.com/v1";
+/** Block types whose file object is downloaded into the hub bucket. */
+const FILE_BLOCK_TYPES = new Set(["image", "file", "pdf", "video", "audio"]);
+/** Skip absurd media so one 2GB video can never blow up a note ingest. */
+const MAX_ASSET_BYTES = 200 * 1024 * 1024;
+const MAX_PARENT_DEPTH = 100;
 
 function asDict(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 }
 
+/** `/` is the hierarchy separator. A literal slash in a Notion title is stored as fullwidth `／`. */
+export function notionPathSegment(value: string, fallback = "无标题"): string {
+  const clean = value.trim().replaceAll("/", "／");
+  return clean || fallback;
+}
+
+function isHtmlDocument(buf: Uint8Array): boolean {
+  const head = new TextDecoder()
+    .decode(buf.slice(0, Math.min(buf.length, 512)))
+    .trimStart()
+    .toLowerCase();
+  return head.startsWith("<!doctype html") || head.startsWith("<html");
+}
+
 export class NotionAdapter implements Adapter {
+  private objectCache = new Map<string, Promise<Record<string, unknown> | null>>();
+  private pathCache = new Map<string, Promise<string>>();
+
   constructor(
     private readonly fetchFn: typeof fetch = fetch,
     private readonly oauth: NotionOAuthClient | null = null,
@@ -108,6 +130,74 @@ export class NotionAdapter implements Adapter {
     return { res, json };
   }
 
+  private cacheObject(obj: Record<string, unknown>): void {
+    const id = canonicalNotionId(String(obj.id ?? ""));
+    if (id) this.objectCache.set(`${String(obj.object ?? "page")}:${id}`, Promise.resolve(obj));
+  }
+
+  private inaccessibleSegment(kind: string, id: string): string {
+    const stableId = canonicalNotionId(id) || id.replaceAll("-", "");
+    return `[无法访问的${kind}-${stableId.slice(0, 8) || "unknown"}]`;
+  }
+
+  private async retrieveObject(ctx: AdapterContext, id: string, kind: "page" | "database"): Promise<Record<string, unknown> | null> {
+    const canonical = canonicalNotionId(id);
+    if (!canonical) return null;
+    const cacheKey = `${kind}:${canonical}`;
+    const cached = this.objectCache.get(cacheKey);
+    if (cached) return cached;
+    const pending = (async () => {
+      const endpoint = kind === "page" ? "pages" : "databases";
+      const { res, json } = await this.requestJson(ctx, `${NOTION_API}/${endpoint}/${canonical}`);
+      return res.ok ? json : null;
+    })();
+    this.objectCache.set(cacheKey, pending);
+    return pending;
+  }
+
+  private async buildPath(ctx: AdapterContext, obj: Record<string, unknown>, seen: Set<string>, depth: number): Promise<string> {
+    const id = canonicalNotionId(String(obj.id ?? ""));
+    const own = notionPathSegment(notionPageTitle(obj), id ? `无标题-${id.slice(0, 8)}` : "无标题");
+    if (depth >= MAX_PARENT_DEPTH) return `${this.inaccessibleSegment("父级过深", id)}/${own}`;
+    if (id && seen.has(id)) return `${this.inaccessibleSegment("循环父级", id)}/${own}`;
+    const nextSeen = new Set(seen);
+    if (id) nextSeen.add(id);
+    const parent = asDict(obj.parent);
+    const type = String(parent?.type ?? "workspace");
+    if (type === "workspace" || !parent) return `${notionPathSegment(ctx.connection.name || "Notion 工作区")}/${own}`;
+    let parentId = "";
+    let kind: "page" | "database" = "page";
+    if (type === "page_id") parentId = String(parent?.page_id ?? "");
+    else if (type === "database_id") { parentId = String(parent?.database_id ?? ""); kind = "database"; }
+    else if (type === "data_source_id") { parentId = String(parent?.database_id ?? parent?.data_source_id ?? ""); kind = "database"; }
+    else {
+      const rawId = String(parent?.[type] ?? "");
+      return `${this.inaccessibleSegment(type || "父级", rawId)}/${own}`;
+    }
+    const canonicalParent = canonicalNotionId(parentId);
+    if (!canonicalParent) return `${this.inaccessibleSegment(kind === "page" ? "页面" : "数据库", parentId)}/${own}`;
+    if (nextSeen.has(canonicalParent)) return `${this.inaccessibleSegment("循环父级", canonicalParent)}/${own}`;
+    const parentObj = await this.retrieveObject(ctx, canonicalParent, kind);
+    if (!parentObj) return `${this.inaccessibleSegment(kind === "page" ? "页面" : "数据库", canonicalParent)}/${own}`;
+    return `${await this.buildPath(ctx, parentObj, nextSeen, depth + 1)}/${own}`;
+  }
+
+  /** Resolve a page/database path without fetching its body; used by sync and in-place backfill. */
+  async resolvePath(ctx: AdapterContext, sourceId: string): Promise<string | null> {
+    const id = canonicalNotionId(sourceId);
+    if (!id) return null;
+    const cached = this.pathCache.get(id);
+    if (cached) return cached;
+    const pending = (async () => {
+      let obj = await this.retrieveObject(ctx, id, "page");
+      if (!obj) obj = await this.retrieveObject(ctx, id, "database");
+      if (!obj) return this.inaccessibleSegment("页面", id);
+      return this.buildPath(ctx, obj, new Set(), 0);
+    })();
+    this.pathCache.set(id, pending);
+    return pending;
+  }
+
   async probe(ctx: AdapterContext): Promise<ProbeResult> {
     const token = notionBearerToken(ctx.secrets);
     if (!token) return { ok: false, status: "error", message: "缺少 Notion 授权" };
@@ -128,34 +218,23 @@ export class NotionAdapter implements Adapter {
     const token = notionBearerToken(ctx.secrets);
     const prev = ctx.cursor ?? {};
     if (!token) return { changes: [], nextCursor: { ...prev } };
+    this.objectCache.clear();
+    this.pathCache.clear();
 
     const cursorTime = typeof prev.last_edited_time === "string" ? prev.last_edited_time : "";
     let maxSeen = cursorTime;
     const changes: Change[] = [];
+    const pending: { obj: Record<string, unknown>; type: "upsert" | "delete"; id: string; edited: string }[] = [];
 
     const ingest = (obj: Record<string, unknown>) => {
       const id = canonicalNotionId(String(obj.id ?? ""));
       if (!id) return "ok" as const;
+      this.cacheObject(obj);
       const edited = String(obj.last_edited_time ?? "");
       if (edited && (!maxSeen || edited > maxSeen)) maxSeen = edited;
       if (cursorTime && edited && edited <= cursorTime) return "older" as const;
-      const title = notionPageTitle(obj) || id;
       const archived = Boolean(obj.archived) || Boolean(obj.in_trash);
-      if (archived) {
-        changes.push({
-          type: "delete",
-          source_id: id,
-          path: title,
-          source_updated_at: edited || undefined,
-        });
-        return "ok" as const;
-      }
-      changes.push({
-        type: "upsert",
-        source_id: id,
-        path: title,
-        source_updated_at: edited || undefined,
-      });
+      pending.push({ obj, type: archived ? "delete" : "upsert", id, edited });
       return "ok" as const;
     };
 
@@ -190,6 +269,11 @@ export class NotionAdapter implements Adapter {
 
     await search("page");
     await search("database");
+    for (const item of pending) {
+      const path = await this.buildPath(ctx, item.obj, new Set(), 0);
+      this.pathCache.set(item.id, Promise.resolve(path));
+      changes.push({ type: item.type, source_id: item.id, path, source_updated_at: item.edited || undefined });
+    }
     const nextCursor: Record<string, unknown> = { ...prev };
     if (maxSeen) nextCursor.last_edited_time = maxSeen;
     return { changes, nextCursor };
@@ -228,6 +312,9 @@ export class NotionAdapter implements Adapter {
     if (pageRes.ok && (pageJson.object === "page" || pageJson.properties)) {
       if (pageJson.archived || pageJson.in_trash) return null;
       const title = notionPageTitle(pageJson) || id;
+      this.cacheObject(pageJson);
+      const path = await this.buildPath(ctx, pageJson, new Set(), 0);
+      this.pathCache.set(id, Promise.resolve(path));
       const frontmatter = flattenNotionProperties(pageJson.properties);
       const blocks = await this.fetchChildrenNested(ctx, String(pageJson.id ?? id));
       const converted = notionBlocksToMarkdown(blocks);
@@ -241,7 +328,7 @@ export class NotionAdapter implements Adapter {
       const markdown = stableMarkdown(frontmatter, markdownBody);
       return {
         source_id: id,
-        path: title || id,
+        path,
         title,
         raw: markdown,
         source_updated_at: String(pageJson.last_edited_time ?? "") || undefined,
@@ -251,11 +338,14 @@ export class NotionAdapter implements Adapter {
     const { res: dbRes, json: dbJson } = await this.requestJson(ctx, `${NOTION_API}/databases/${id}`);
     if (dbRes.ok && (dbJson.object === "database" || dbJson.properties)) {
       const title = notionPageTitle(dbJson) || id;
+      this.cacheObject(dbJson);
+      const path = await this.buildPath(ctx, dbJson, new Set(), 0);
+      this.pathCache.set(id, Promise.resolve(path));
       const body = notionDatabaseToMarkdown(dbJson);
       const markdown = stableMarkdown({ object: "database" }, body);
       return {
         source_id: id,
-        path: title || id,
+        path,
         title,
         raw: markdown,
         source_updated_at: String(dbJson.last_edited_time ?? "") || undefined,
@@ -270,7 +360,7 @@ export class NotionAdapter implements Adapter {
       for (const block of list) {
         const type = String(block.type ?? "");
         const data = asDict(block[type]) ?? asDict(block.image) ?? asDict(block.file);
-        if (type === "image" || type === "file" || type === "pdf") {
+        if (FILE_BLOCK_TYPES.has(type)) {
           const payload = asDict(block[type]) ?? {};
           let url = "";
           let name = "";
@@ -300,13 +390,48 @@ export class NotionAdapter implements Adapter {
 
   private async downloadPublic(url: string): Promise<Uint8Array | null> {
     try {
-      const res = await this.fetchFn(url, { signal: AbortSignal.timeout(15000) });
-      if (!res.ok) return null;
+      const res = await this.fetchFn(url, { signal: AbortSignal.timeout(60000) });
+      if (!res.ok) {
+        this.skipAsset(url, `http ${res.status}`);
+        return null;
+      }
+      const declared = Number(res.headers?.get?.("content-length") ?? 0);
+      if (declared && declared > MAX_ASSET_BYTES) {
+        this.skipAsset(url, `too large (${declared} bytes)`);
+        return null;
+      }
+      const type = (res.headers?.get?.("content-type") ?? "").toLowerCase();
       const buf = new Uint8Array(await res.arrayBuffer());
-      return buf.byteLength ? buf : null;
-    } catch {
+      if (!buf.byteLength) {
+        this.skipAsset(url, "empty body");
+        return null;
+      }
+      if (buf.byteLength > MAX_ASSET_BYTES) {
+        this.skipAsset(url, `too large (${buf.byteLength} bytes)`);
+        return null;
+      }
+      // A page (e.g. a YouTube watch url on a `video` block) is not an attachment.
+      if (type.startsWith("text/html") || isHtmlDocument(buf)) {
+        this.skipAsset(url, "html page, not a media file");
+        return null;
+      }
+      return buf;
+    } catch (err) {
+      this.skipAsset(url, err instanceof Error ? err.message : String(err));
       return null;
     }
+  }
+
+  /** A failed attachment must never fail the note ingest. Log and move on. */
+  private skipAsset(url: string, reason: string): void {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        message: "notion asset skipped",
+        reason,
+        url: url.split("?")[0],
+      }),
+    );
   }
 
   private async downloadBlockFiles(blocks: Record<string, unknown>[]): Promise<{ url: string; name: string; bytes: Uint8Array }[]> {

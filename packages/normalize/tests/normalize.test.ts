@@ -58,3 +58,18 @@ describe("blocks", () => {
     expect(blocks[1].source_block_id).toMatch(/hi\/para0-/);
   });
 });
+
+describe("skipped heading levels", () => {
+  it("does not throw when a note starts at h3 or jumps h1 -> h3", () => {
+    // `headingPath.length = depth - 1` used to leave undefined holes, which crashed
+    // slugPart() and failed the entire note ingest.
+    const blocks = extractBlocks("### Deep start\n\nbody text\n");
+    expect(blocks.length).toBeGreaterThan(0);
+    expect(blocks.some((b) => b.type === "heading")).toBe(true);
+    expect(blocks.every((b) => typeof b.source_block_id === "string" && b.source_block_id.length > 0)).toBe(true);
+
+    const jump = extractBlocks("# One\n\n#### Four\n\nbody\n");
+    expect(jump.some((b) => b.markdown === "body")).toBe(true);
+    expect(jump.every((b) => !b.source_block_id.includes("undefined"))).toBe(true);
+  });
+});

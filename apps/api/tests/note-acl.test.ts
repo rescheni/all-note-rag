@@ -198,9 +198,11 @@ describe("document-level note ACL", () => {
 
     const tree = await get(`/v1/spaces/${teamId}/tree`, tokenB);
     expect(tree.status).toBe(200);
-    const dump = JSON.stringify(tree.body.tree);
+    const dump = JSON.stringify(tree.body);
     expect(dump).not.toContain(hiddenNote);
     expect(dump).toContain(openNote);
+    const groups = tree.body.groups as { source: string; tree: { name: string }[] }[];
+    expect(groups.some((g) => g.source === "obsidian")).toBe(true);
 
     const search = await get(`/v1/spaces/${teamId}/search?q=${encodeURIComponent(SECRET)}`, tokenB);
     expect(search.status).toBe(200);

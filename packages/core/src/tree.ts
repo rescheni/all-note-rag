@@ -7,6 +7,9 @@ export type TreeNode = {
   note_id?: string;
   asset_id?: string;
   source?: string;
+  /** Display emoji (converted from frontmatter.icon), when present. */
+  icon?: string | null;
+  has_children?: boolean;
   children?: TreeNode[];
 };
 
@@ -20,6 +23,8 @@ export type TreeInput = {
   note_path?: string;
   /** Leaf display name (note.title). Path stays the source of truth. */
   title?: string;
+  /** Display emoji for the note (already converted). */
+  icon?: string | null;
   connection_id?: string;
   connection_name?: string;
   /** Note source_id (or owning note's source_id for assets). Used to hide SiYuan asset-notes. */
@@ -27,12 +32,33 @@ export type TreeInput = {
   note_source_id?: string;
 };
 
+export type ConnectionMeta = {
+  id: string;
+  source: string;
+  name: string;
+};
+
+export type SourceTreeGroup = {
+  source: string;
+  connection_id: string;
+  name: string;
+  tree: TreeNode[];
+};
+
 export type BuildFileTreeOpts = {
   /** Map SiYuan box id (14digit-id) → notebook name from conf.json / cursor. */
   boxNames?: Record<string, string>;
   boxNamesByConnection?: Record<string, Record<string, string>>;
-  /** Wrap each connection/source as a top folder (我的思源 / Obsidian / 飞书). */
+  /** Group into source sections (飞书 / Notion / 思源 / Obsidian). */
   groupBySource?: boolean;
+  /** Connected sources to include even when they have 0 notes. */
+  connections?: ConnectionMeta[];
+  /**
+   * When set, only materialize this many folder levels.
+   * Deeper paths mark `has_children` on the clipped folder and skip descendants.
+   * Use 1 for lazy tree API responses so 10k notes never become a giant in-memory tree.
+   */
+  clipDepth?: number;
 };
 
 /** Box id without `.sy`. */
@@ -48,6 +74,9 @@ export const SOURCE_TREE_LABEL: Record<string, string> = {
   feishu: "飞书",
 };
 
+/** Left-rail order: 飞书 / Notion / 思源 / Obsidian. */
+export const SOURCE_TREE_ORDER = ["feishu", "notion", "siyuan", "obsidian"] as const;
+
 /** SiYuan workspace files ingested as notes (`asset:{box}:{path}` or `asset:assets/foo.jpeg`). */
 export function isAssetNoteId(source_id?: string | null): boolean {
   return typeof source_id === "string" && source_id.startsWith("asset:");
@@ -60,8 +89,28 @@ export function isImageLeafPath(path?: string | null, title?: string | null): bo
   return IMAGE_LEAF_RE.test(posixPath(path));
 }
 
+/**
+ * A slash padded by spaces belongs to a bilingual title, not to the path.
+ * Feishu wiki nodes arrive as `示例知识库 / Wiki samples/成员手册 / Member Manual`:
+ * splitting that on every slash shreds one title into two half-name folders and
+ * the whole space stops looking like a tree. Guard those before splitting and
+ * put them back, so a segment keeps the name the source gave it.
+ */
+const TITLE_SLASH = "\u0000";
+
+function guardTitleSlashes(p: string): string {
+  return p.replace(/ \/ /g, ` ${TITLE_SLASH} `);
+}
+
+function restoreTitleSlashes(seg: string): string {
+  return seg.split(TITLE_SLASH).join("/");
+}
+
 function splitPath(p: string): string[] {
-  return p.replace(/\\/g, "/").replace(/^\/+/, "").split("/").filter((s) => s && s !== ".");
+  return guardTitleSlashes(p.replace(/\\/g, "/").replace(/^\/+/, ""))
+    .split("/")
+    .filter((s) => s && s !== ".")
+    .map(restoreTitleSlashes);
 }
 
 function posixPath(p: string): string {
@@ -111,7 +160,7 @@ function canonicalizeSiyuanPath(path: string, source?: string, boxNames?: Record
   return raw;
 }
 
-function isAssetsDumpName(name: string): boolean {
+export function isAssetsDumpName(name: string): boolean {
   const n = name.trim().toLowerCase();
   return n === "assets" || n === "附件";
 }
@@ -172,10 +221,6 @@ function sourceRootName(item: TreeInput): string {
   return SOURCE_TREE_LABEL[item.source ?? ""] || item.source || "源";
 }
 
-function sourceGroupKey(item: TreeInput): string {
-  return item.connection_id || item.source || "_";
-}
-
 function isNotebookSeg(seg: string, index: number, skipData: boolean): boolean {
   const first = skipData ? 1 : 0;
   return index === first && ID_SEG_RE.test(seg);
@@ -209,7 +254,13 @@ function walkParts(
     if (!last && ID_SEG_RE.test(segs[i]) && !name) {
       continue;
     }
-    out.push({ name: name || segs[i], path: full });
+    // Never leak a bare SiYuan id into the tree — leafDisplayName covers the last hop.
+    const label = name || (ID_SEG_RE.test(stripSy(segs[i])) ? "" : segs[i]);
+    if (!label) {
+      if (last) out.push({ name: "笔记", path: full });
+      continue;
+    }
+    out.push({ name: label, path: full });
   }
   return out;
 }
@@ -265,6 +316,7 @@ function upsertLeaf(children: TreeNode[], leaf: TreeNode, boxNames?: Record<stri
       note_id: leaf.note_id ?? prev.note_id,
       asset_id: leaf.asset_id ?? prev.asset_id,
       source: leaf.source ?? prev.source,
+      icon: leaf.icon ?? prev.icon,
       children: leaf.children ?? prev.children,
     };
     if (!children[i].children) children[i].children = prev.children;
@@ -278,6 +330,7 @@ function insertAt(
   parts: { name: string; path: string }[],
   leaf: TreeNode,
   boxNames?: Record<string, string>,
+  clipDepth?: number,
 ): void {
   if (!parts.length) {
     upsertLeaf(root, leaf, boxNames);
@@ -287,6 +340,15 @@ function insertAt(
   for (let i = 0; i < parts.length; i++) {
     const { name, path } = parts[i];
     const last = i === parts.length - 1;
+    // Clip: keep folders up to clipDepth; anything deeper only sets has_children.
+    if (clipDepth != null && i + 1 > clipDepth) {
+      return;
+    }
+    if (clipDepth != null && i + 1 === clipDepth && !last) {
+      const folder = ensureFolder(children, name, path, boxNames);
+      folder.has_children = true;
+      return;
+    }
     if (last) {
       upsertLeaf(children, { ...leaf, name: leaf.name || name, path: leaf.path || path }, boxNames);
       return;
@@ -369,7 +431,12 @@ function leafDisplayName(n: TreeInput, parts: { name: string }[], path: string):
   return "笔记";
 }
 
-function buildOneTree(items: TreeInput[], boxNames?: Record<string, string>, defaultSource?: string): TreeNode[] {
+function buildOneTree(
+  items: TreeInput[],
+  boxNames?: Record<string, string>,
+  defaultSource?: string,
+  clipDepth?: number,
+): TreeNode[] {
   const filtered = visibleItems(items);
   const notes = filtered.filter((x) => x.kind === "note" && x.path);
   const assets = filtered.filter((x) => x.kind === "asset" && x.path);
@@ -392,8 +459,10 @@ function buildOneTree(items: TreeInput[], boxNames?: Record<string, string>, def
         kind: "note",
         note_id: n.note_id,
         source,
+        icon: n.icon || undefined,
       },
       boxNames,
+      clipDepth,
     );
   }
 
@@ -422,6 +491,7 @@ function buildOneTree(items: TreeInput[], boxNames?: Record<string, string>, def
             source,
           },
           boxNames,
+          clipDepth,
         );
         continue;
       }
@@ -447,6 +517,7 @@ function buildOneTree(items: TreeInput[], boxNames?: Record<string, string>, def
           source,
         },
         boxNames,
+      clipDepth,
       );
     }
 
@@ -467,6 +538,7 @@ function buildOneTree(items: TreeInput[], boxNames?: Record<string, string>, def
         source,
       },
       boxNames,
+      clipDepth,
     );
   }
 
@@ -474,45 +546,173 @@ function buildOneTree(items: TreeInput[], boxNames?: Record<string, string>, def
   return root;
 }
 
+function sourceOrder(source: string): number {
+  const i = (SOURCE_TREE_ORDER as readonly string[]).indexOf(source);
+  return i === -1 ? 100 : i;
+}
+
+function groupName(source: string, connectionName?: string): string {
+  const named = connectionName?.trim();
+  if (named) return named;
+  return SOURCE_TREE_LABEL[source] || source || "源";
+}
+
+function sortSourceGroups(groups: SourceTreeGroup[]): SourceTreeGroup[] {
+  return groups.sort(
+    (a, b) => sourceOrder(a.source) - sourceOrder(b.source) || a.name.localeCompare(b.name, "zh"),
+  );
+}
+
+/** One group per connection, including empty connected sources. */
+export function buildSourceGroups(items: TreeInput[], opts?: BuildFileTreeOpts): SourceTreeGroup[] {
+  const filtered = visibleItems(items);
+  const byConn = new Map<string, TreeInput[]>();
+  for (const item of filtered) {
+    const id = item.connection_id || item.source || "_";
+    const arr = byConn.get(id);
+    if (arr) arr.push(item);
+    else byConn.set(id, [item]);
+  }
+
+  const metas: ConnectionMeta[] = [];
+  const seen = new Set<string>();
+  for (const c of opts?.connections ?? []) {
+    if (!c.id || seen.has(c.id)) continue;
+    seen.add(c.id);
+    metas.push({ id: c.id, source: c.source, name: c.name });
+  }
+  for (const item of filtered) {
+    const id = item.connection_id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    metas.push({
+      id,
+      source: item.source || "",
+      name: sourceRootName(item),
+    });
+  }
+  for (const [key, list] of byConn) {
+    if (seen.has(key)) continue;
+    const first = list[0];
+    seen.add(key);
+    metas.push({
+      id: key,
+      source: first?.source || "",
+      name: sourceRootName(first ?? { path: "", kind: "note" }),
+    });
+  }
+
+  const groups: SourceTreeGroup[] = [];
+  for (const meta of metas) {
+    const connItems = byConn.get(meta.id) ?? [];
+    const boxNames = opts?.boxNamesByConnection?.[meta.id] ?? opts?.boxNames;
+    groups.push({
+      source: meta.source,
+      connection_id: meta.id,
+      name: groupName(meta.source, meta.name),
+      tree: buildOneTree(connItems, boxNames, meta.source, opts?.clipDepth),
+    });
+  }
+  return sortSourceGroups(groups);
+}
+
+/** Source folders; nested connection folders only when a source has more than one. */
+export function assembleSourceTree(groups: SourceTreeGroup[]): TreeNode[] {
+  const bySource = new Map<string, SourceTreeGroup[]>();
+  for (const g of groups) {
+    const k = g.source || "_";
+    const arr = bySource.get(k);
+    if (arr) arr.push(g);
+    else bySource.set(k, [g]);
+  }
+  const keys = [...bySource.keys()].sort(
+    (a, b) => sourceOrder(a) - sourceOrder(b) || a.localeCompare(b, "zh"),
+  );
+  const roots: TreeNode[] = [];
+  for (const source of keys) {
+    const gs = bySource.get(source)!;
+    const label = SOURCE_TREE_LABEL[source] || gs[0]?.name || source;
+    let children: TreeNode[];
+    if (gs.length === 1) {
+      children = gs[0].tree;
+    } else {
+      children = gs.map((g) => ({
+        name: g.name,
+        path: `conn:${g.connection_id}`,
+        kind: "folder" as const,
+        source: g.source,
+        children: g.tree.length ? g.tree : undefined,
+        has_children: g.tree.length > 0,
+      }));
+    }
+    roots.push({
+      name: label,
+      path: `src:${source}`,
+      kind: "folder",
+      source,
+      children: children.length ? children : undefined,
+      has_children: children.length > 0,
+    });
+  }
+  return roots;
+}
+
 /** Nested folder/note/asset tree from note paths + asset source_paths. */
 export function buildFileTree(items: TreeInput[], opts?: BuildFileTreeOpts): TreeNode[] {
   const filtered = visibleItems(items);
   if (!opts?.groupBySource) {
-    return buildOneTree(filtered, opts?.boxNames);
+    return buildOneTree(filtered, opts?.boxNames, undefined, opts?.clipDepth);
   }
+  return assembleSourceTree(buildSourceGroups(filtered, opts));
+}
 
-  const groups = new Map<
-    string,
-    { name: string; source?: string; items: TreeInput[]; boxNames?: Record<string, string> }
-  >();
-  for (const item of filtered) {
-    const key = sourceGroupKey(item);
-    let g = groups.get(key);
-    if (!g) {
-      g = {
-        name: sourceRootName(item),
-        source: item.source,
-        items: [],
-        boxNames: opts.boxNamesByConnection?.[key] ?? opts.boxNames,
-      };
-      groups.set(key, g);
+export function findTreeNode(nodes: TreeNode[], path: string): TreeNode | null {
+  for (const n of nodes) {
+    if (n.path === path) return n;
+    if (n.children?.length) {
+      const hit = findTreeNode(n.children, path);
+      if (hit) return hit;
     }
-    g.items.push(item);
   }
+  return null;
+}
 
-  const roots: TreeNode[] = [];
-  for (const [key, g] of groups) {
-    const children = buildOneTree(g.items, g.boxNames, g.source);
-    roots.push({
-      name: g.name,
-      path: `conn:${key}`,
-      kind: "folder",
-      source: g.source,
-      children,
-    });
-  }
-  sortNodes(roots);
-  return roots;
+export function graftTreeChildren(nodes: TreeNode[], path: string, children: TreeNode[]): TreeNode[] {
+  return nodes.map((n) => {
+    if (n.path === path) {
+      return {
+        ...n,
+        children: children.length ? children : undefined,
+        has_children: children.length > 0,
+      };
+    }
+    if (n.children?.length) {
+      return { ...n, children: graftTreeChildren(n.children, path, children) };
+    }
+    return n;
+  });
+}
+
+/** First-level notebooks (or N folder depths). Strips descendants and marks has_children. */
+export function clipTreeToDepth(nodes: TreeNode[], keepDepth: number): TreeNode[] {
+  if (keepDepth < 1) return [];
+  const visible = nodes.filter((n) => !(n.kind === "folder" && isAssetsDumpName(n.name)));
+  return visible.map((n) => {
+    const kids = n.children;
+    const branched = Boolean(kids?.length) || Boolean(n.has_children);
+    if (keepDepth === 1) {
+      const out: TreeNode = { ...n };
+      delete out.children;
+      if (branched) out.has_children = true;
+      else delete out.has_children;
+      return out;
+    }
+    return {
+      ...n,
+      children: kids?.length ? clipTreeToDepth(kids, keepDepth - 1) : undefined,
+      has_children: branched,
+    };
+  });
 }
 
 /** Paths to auto-expand (first `levels` folder depths). Skips assets dumps. */

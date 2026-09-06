@@ -10,17 +10,16 @@ describe("activity aggregation", () => {
     const series = buildActivitySeries({
       days: 7,
       now,
-      notes: [
-        { date: "2026-03-12", notes: 2 },
-        { date: "2026-03-13", notes: 1 },
+      rows: [
+        { date: "2026-03-12", notes: 2, chars: 1200, blocks: 8 },
+        { date: "2026-03-13", notes: 1, chars: 400, blocks: 3 },
       ],
-      upserts: [{ date: "2026-03-12", upserts: 4 }],
     });
     expect(series).toHaveLength(7);
     expect(series[0]?.date).toBe(addYmd("2026-03-13", -6));
-    expect(series.at(-1)).toMatchObject({ date: "2026-03-13", notes: 1, upserts: 0 });
+    expect(series.at(-1)).toMatchObject({ date: "2026-03-13", notes: 1, chars: 400, blocks: 3 });
     const d12 = series.find((d) => d.date === "2026-03-12");
-    expect(d12).toMatchObject({ notes: 2, upserts: 4 });
+    expect(d12).toMatchObject({ notes: 2, chars: 1200, blocks: 8 });
   });
 
   it("counts a late-UTC update on the next Shanghai date", () => {

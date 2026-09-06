@@ -78,7 +78,7 @@ export function stableMarkdown(frontmatter: Record<string, unknown>, body: strin
 }
 
 function slugPart(s: string): string {
-  const t = s.trim().toLowerCase().replace(/\s+/g, "-");
+  const t = String(s ?? "").trim().toLowerCase().replace(/\s+/g, "-");
   return t.replace(/[^\w\u3400-\u9fff-]/g, "").slice(0, 48) || "x";
 }
 
@@ -103,7 +103,7 @@ function flush(open: OpenBlock | null, blocks: NormalizedBlock[], counters: Reco
   const key = `${open.type}`;
   counters[key] = (counters[key] ?? 0) + 1;
   const idx = counters[key] - 1;
-  const hp = open.headingPath.map(slugPart).join("/") || "root";
+  const hp = open.headingPath.filter(Boolean).map(slugPart).join("/") || "root";
   const source_block_id = `${hp}/${open.type}${idx}-${shortFingerprint(text || markdown)}`;
   blocks.push({
     source_block_id,
@@ -155,6 +155,9 @@ export function extractBlocks(body: string): NormalizedBlock[] {
     if (heading) {
       const depth = heading[1].length;
       headingPath.length = depth - 1;
+      for (let i = 0; i < headingPath.length; i++) {
+        if (headingPath[i] === undefined) headingPath[i] = "";
+      }
       headingPath.push(heading[2].trim());
       start("heading", depth, line, headingPath);
       flush(open, blocks, counters);

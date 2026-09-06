@@ -3,6 +3,8 @@ import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
+import { SafeMarkdown } from "@/lib/safe-markdown";
+import { PathCrumbs, decodeSegment } from "../notes/crumbs";
 
 type Citation = {
   note_id: string;
@@ -11,6 +13,8 @@ type Citation = {
   title: string;
   quote: string;
   preview_url: string;
+  path?: string;
+  connection_id?: string;
 };
 
 type AskOut = {
@@ -18,6 +22,15 @@ type AskOut = {
   citations: Citation[];
   unknown?: boolean;
 };
+
+function shelfHref(c: Citation): string | null {
+  if (!c.connection_id || !c.path) return null;
+  const parts = c.path.split("/").filter(Boolean);
+  const parent = parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+  const q = new URLSearchParams({ book: c.connection_id });
+  if (parent) q.set("path", parent);
+  return `/notes?${q.toString()}`;
+}
 
 export default function AskPage() {
   const [space, setSpace] = useState<Space | null>(null);
@@ -70,26 +83,37 @@ export default function AskPage() {
       )}
       <form className="search-bar" onSubmit={onSubmit}>
         <input name="query" type="text" placeholder="问当前空间的笔记…" required />
-        <button type="submit" disabled={busy || !space}>{busy ? "检索中…" : "提问"}</button>
+        <button type="submit" className="signature" disabled={busy || !space}>{busy ? "检索中…" : "提问"}</button>
       </form>
       {err && <p className="err">{err}</p>}
       {out && (
         <>
-          <div className="ask-answer card">{out.answer_markdown}</div>
+          <div className="ask-answer card">
+            <SafeMarkdown source={out.answer_markdown} />
+          </div>
           {out.unknown || out.citations.length === 0 ? null : (
             <>
               <h2>来源</h2>
               <div className="cite-grid">
-                {out.citations.map((c) => (
-                  <Link
-                    key={c.note_id + (c.source_block_id || c.block_id)}
-                    className="source-card"
-                    href={c.preview_url || `/notes/${c.note_id}${c.source_block_id ? `#b-${c.source_block_id}` : ""}`}
-                  >
-                    <h3>{c.title}</h3>
-                    {c.quote && <blockquote className="ask-quote">{c.quote}</blockquote>}
-                  </Link>
-                ))}
+                {out.citations.map((c) => {
+                  const shelf = shelfHref(c);
+                  return (
+                    <div key={c.note_id + (c.source_block_id || c.block_id)} className="source-card">
+                      <Link
+                        href={c.preview_url || `/notes/${c.note_id}${c.source_block_id ? `#b-${c.source_block_id}` : ""}`}
+                      >
+                        <h3>{decodeSegment(c.title) || "未命名"}</h3>
+                      </Link>
+                      {c.path ? <PathCrumbs path={c.path} title={c.title} /> : null}
+                      {c.quote && <blockquote className="ask-quote">{c.quote}</blockquote>}
+                      {shelf ? (
+                        <div className="muted">
+                          <Link href={shelf}>在书架中打开</Link>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
               </div>
             </>
           )}

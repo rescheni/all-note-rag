@@ -50,6 +50,7 @@ export function pickSecrets(raw: Record<string, unknown> | undefined): Connectio
   const secret_key = asString(raw.secret_key);
   const token = asString(raw.token);
   const access_token = asString(raw.access_token);
+  const user_access_token = asString(raw.user_access_token);
   const refresh_token = asString(raw.refresh_token);
   const app_id = asString(raw.app_id);
   const app_secret = asString(raw.app_secret);
@@ -58,6 +59,7 @@ export function pickSecrets(raw: Record<string, unknown> | undefined): Connectio
   if (secret_key) s.secret_key = secret_key;
   if (token) s.token = token;
   if (access_token) s.access_token = access_token;
+  if (user_access_token) s.user_access_token = user_access_token;
   if (refresh_token) s.refresh_token = refresh_token;
   if (app_id) s.app_id = app_id;
   if (app_secret) s.app_secret = app_secret;
@@ -67,7 +69,7 @@ export function pickSecrets(raw: Record<string, unknown> | undefined): Connectio
 
 export function secretsHavePayload(s: ConnectionSecrets): boolean {
   return Boolean(
-    s.access_key || s.secret_key || s.token || s.access_token || s.refresh_token || s.app_id || s.app_secret || s.repo_password,
+    s.access_key || s.secret_key || s.token || s.access_token || s.user_access_token || s.refresh_token || s.app_id || s.app_secret || s.repo_password,
   );
 }
 
@@ -105,6 +107,7 @@ export function validateConnectionInput(body: unknown): ValidateResult {
   delete cfgIn.secret_key;
   delete cfgIn.token;
   delete cfgIn.access_token;
+  delete cfgIn.user_access_token;
   delete cfgIn.refresh_token;
   delete cfgIn.app_id;
   delete cfgIn.app_secret;
@@ -206,6 +209,8 @@ export function validateConnectionInput(body: unknown): ValidateResult {
     };
     const wiki_space_id = asString(cfgIn.wiki_space_id);
     if (wiki_space_id) config.wiki_space_id = wiki_space_id;
+    const wiki_node_token = asString(cfgIn.wiki_node_token);
+    if (wiki_node_token) config.wiki_node_token = wiki_node_token;
     return {
       ok: true,
       value: { source, name, config, mode: null, secrets, status: "active" },

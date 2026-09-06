@@ -49,6 +49,8 @@ export type ConnectionConfig = {
   official_s3?: boolean;
   workspace_id?: string;
   wiki_space_id?: string;
+  /** Wiki node token or https://xxx.feishu.cn/wiki/TOKEN page URL. */
+  wiki_node_token?: string;
   obj_types?: string[];
   mode?: string;
   /** Last Feishu contacts sync tallies. Never contains tokens or emails. */
@@ -74,9 +76,12 @@ export type ConnectionSecrets = {
   secret_key?: string;
   token?: string;
   access_token?: string;
+  user_access_token?: string;
   refresh_token?: string;
   app_id?: string;
   app_secret?: string;
+  /** OAuth scope string returned by Feishu token exchange. */
+  scope?: string;
   repo_password?: string;
 };
 

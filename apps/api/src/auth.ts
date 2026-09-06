@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import type { Context, Next } from "hono";
 import { env } from "./env.ts";
@@ -55,9 +55,27 @@ export function verifyToken(token: string): { sub: string } | null {
   }
 }
 
-function readToken(c: Context): string | null {
+/** Durable API token: hub_ + 32 random bytes base64url. */
+export function generateApiToken(): { token: string; prefix: string; hash: string } {
+  const token = `hub_${b64url(randomBytes(32))}`;
+  return {
+    token,
+    prefix: token.slice(0, 8),
+    hash: hashApiToken(token),
+  };
+}
+
+export function hashApiToken(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+function readBearer(c: Context): string | null {
   const auth = c.req.header("authorization");
   if (auth?.toLowerCase().startsWith("bearer ")) return auth.slice(7).trim();
+  return null;
+}
+
+function readCookieOrQueryToken(c: Context): string | null {
   const cookie = c.req.header("cookie") ?? "";
   const m = /(?:^|;\s*)hub_session=([^;]+)/.exec(cookie);
   if (m) return decodeURIComponent(m[1]);
@@ -66,16 +84,93 @@ function readToken(c: Context): string | null {
   return q?.trim() || null;
 }
 
+function parseBasicAuth(c: Context): { email: string; password: string } | null {
+  const auth = c.req.header("authorization");
+  if (!auth?.toLowerCase().startsWith("basic ")) return null;
+  try {
+    const decoded = Buffer.from(auth.slice(6).trim(), "base64").toString("utf8");
+    const i = decoded.indexOf(":");
+    if (i < 0) return null;
+    const email = decoded.slice(0, i).trim().toLowerCase();
+    const password = decoded.slice(i + 1);
+    if (!email || !password) return null;
+    return { email, password };
+  } catch {
+    return null;
+  }
+}
+
+async function loadUser(id: string): Promise<AuthUser | null> {
+  const r = await query<AuthUser>("SELECT id, email, display_name FROM users WHERE id = $1", [id]);
+  return r.rows[0] ?? null;
+}
+
+async function resolveApiToken(token: string): Promise<AuthUser | null> {
+  const hash = hashApiToken(token);
+  const r = await query<{ id: string; user_id: string }>(
+    `SELECT id, user_id FROM api_tokens
+     WHERE token_hash = $1 AND revoked_at IS NULL`,
+    [hash],
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  // Fire-and-forget last_used bump
+  void query("UPDATE api_tokens SET last_used_at = now() WHERE id = $1", [row.id]).catch(() => undefined);
+  return loadUser(row.user_id);
+}
+
+async function resolveBasic(c: Context): Promise<AuthUser | null> {
+  const creds = parseBasicAuth(c);
+  if (!creds) return null;
+  const r = await query<{ id: string; email: string; display_name: string | null; password_hash: string }>(
+    "SELECT id, email, display_name, password_hash FROM users WHERE email = $1",
+    [creds.email],
+  );
+  const row = r.rows[0];
+  if (!row || !(await verifyPassword(creds.password, row.password_hash))) return null;
+  return { id: row.id, email: row.email, display_name: row.display_name };
+}
+
 export async function requireUser(c: Context, next: Next) {
-  const token = readToken(c);
+  const bearer = readBearer(c);
+  if (bearer) {
+    if (bearer.startsWith("hub_")) {
+      const user = await resolveApiToken(bearer);
+      if (!user) return errors.unauthenticated(c);
+      c.set("user", user);
+      await next();
+      return;
+    }
+    const payload = verifyToken(bearer);
+    if (!payload) return errors.unauthenticated(c);
+    const user = await loadUser(payload.sub);
+    if (!user) return errors.unauthenticated(c);
+    c.set("user", user);
+    await next();
+    return;
+  }
+
+  // HTTP Basic for agents that only have email/password
+  if (c.req.header("authorization")?.toLowerCase().startsWith("basic ")) {
+    const user = await resolveBasic(c);
+    if (!user) return errors.unauthenticated(c);
+    c.set("user", user);
+    await next();
+    return;
+  }
+
+  const token = readCookieOrQueryToken(c);
   if (!token) return errors.unauthenticated(c);
+  if (token.startsWith("hub_")) {
+    const user = await resolveApiToken(token);
+    if (!user) return errors.unauthenticated(c);
+    c.set("user", user);
+    await next();
+    return;
+  }
   const payload = verifyToken(token);
   if (!payload) return errors.unauthenticated(c);
-  const r = await query<AuthUser>(
-    "SELECT id, email, display_name FROM users WHERE id = $1",
-    [payload.sub],
-  );
-  const user = r.rows[0];
+  const user = await loadUser(payload.sub);
   if (!user) return errors.unauthenticated(c);
   c.set("user", user);
   await next();

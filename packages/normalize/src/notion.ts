@@ -87,6 +87,27 @@ function fileUrl(obj: unknown): { url: string; name: string } {
   return { url: String(d.url ?? ""), name: String(d.name ?? "") };
 }
 
+/**
+ * Notion media blocks come in two flavours (developers.notion.com/reference/block):
+ * `type: "file"` (Notion-hosted, temporary signed url) and `type: "external"` (public url).
+ * Notion-hosted media is always a real media file, so it always gets a player. An external
+ * url only gets a player when it points at a direct media file — `video` blocks legitimately
+ * hold YouTube watch/embed page links, which must stay a plain link.
+ */
+function playableMediaUrl(payload: Dict | null, url: string): boolean {
+  if (!url) return false;
+  const t = payload?.type;
+  if (t === "file" || t === "file_upload") return true;
+  return /\.(mp3|wav|ogg|oga|opus|m4a|aac|flac|amr|wma|mp4|m4v|webm|mov|qt|avi|mkv|wmv|flv|mpe?g|3gp)$/i.test(
+    url.split(/[?#]/)[0],
+  );
+}
+
+/** Bare-attribute HTML5 player. The url is swapped for the local asset name after download. */
+function mediaPlayerMarkdown(tag: "audio" | "video", url: string): string {
+  return `<${tag} controls src="${url}"></${tag}>`;
+}
+
 function flattenOne(p: Dict, type: string): unknown {
   switch (type) {
     case "title":
@@ -202,7 +223,16 @@ function notionBlockType(type: string): BlockType {
   if (type === "code") return "code";
   if (type === "quote" || type === "callout") return "quote";
   if (type === "table") return "table";
-  if (type === "image" || type === "file" || type === "bookmark" || type === "embed" || type === "video") {
+  if (
+    type === "image" ||
+    type === "file" ||
+    type === "pdf" ||
+    type === "bookmark" ||
+    type === "embed" ||
+    type === "link_preview" ||
+    type === "video" ||
+    type === "audio"
+  ) {
     return "embed";
   }
   return "unknown";
@@ -325,6 +355,51 @@ function convertBlock(block: Dict, depth: number, outBlocks: NormalizedBlock[]):
       const { url, name } = fileUrl(f);
       md = `[${name || "file"}](${url})`;
       text = name;
+      lines.push(md);
+      break;
+    }
+    case "pdf": {
+      const f = asDict(block.pdf);
+      const { url, name } = fileUrl(f);
+      const cap = richTextToMarkdown(f?.caption);
+      if (!url) {
+        skipNative = true;
+        break;
+      }
+      const label = name || cap || "pdf";
+      md = `[${label}](${url})`;
+      text = label;
+      lines.push(md);
+      break;
+    }
+    case "video":
+    case "audio": {
+      const data = asDict(block[type]);
+      const { url, name } = fileUrl(data);
+      const cap = richTextToMarkdown(data?.caption);
+      if (!url) {
+        skipNative = true;
+        break;
+      }
+      const label = cap || name || type;
+      // Player when the url is real media; plain link for page embeds (e.g. YouTube).
+      md = playableMediaUrl(data, url) ? mediaPlayerMarkdown(type, url) : `[${label}](${url})`;
+      text = label;
+      lines.push(md);
+      break;
+    }
+    case "embed":
+    case "link_preview": {
+      // Keep the reference visible instead of dropping the block on the floor.
+      const data = asDict(block[type]);
+      const url = String(data?.url ?? "");
+      const cap = richTextToMarkdown(data?.caption);
+      if (!url) {
+        skipNative = true;
+        break;
+      }
+      md = `[${cap || url}](${url})`;
+      text = cap || url;
       lines.push(md);
       break;
     }
@@ -466,6 +541,28 @@ function fromMarkdown(raw: string, payload: NotePayload, extraAssets: Normalized
   };
 }
 
+
+/** Pull Notion page icon into frontmatter (emoji string, or icon_url for file/external). */
+export function applyNotionPageIcon(frontmatter: Record<string, unknown>, page: Dict): void {
+  const icon = asDict(page.icon);
+  if (!icon) return;
+  const type = String(icon.type ?? "");
+  if (type === "emoji") {
+    const emoji = String(icon.emoji ?? "").trim();
+    if (emoji) frontmatter.icon = emoji;
+    return;
+  }
+  if (type === "external") {
+    const url = String(asDict(icon.external)?.url ?? "").trim();
+    if (url) frontmatter.icon_url = url;
+    return;
+  }
+  if (type === "file") {
+    const url = String(asDict(icon.file)?.url ?? "").trim();
+    if (url) frontmatter.icon_url = url;
+  }
+}
+
 export function normalizeNotionNote(
   payload: NotePayload,
   _connectionId: string,
@@ -479,6 +576,7 @@ export function normalizeNotionNote(
       const page = asDict(parsed.page) ?? parsed;
       const props = page.properties ?? parsed.properties;
       const frontmatter = flattenNotionProperties(props);
+      applyNotionPageIcon(frontmatter, page);
       if (parsed.object === "database" || page.object === "database") {
         frontmatter.object = "database";
       }

@@ -7,6 +7,7 @@ export type OAuthStatePayload = {
   cid?: string;
   name?: string;
   ws?: string;
+  origin?: string;
   n: string;
   exp: number;
 };
@@ -16,7 +17,7 @@ function b64url(buf: Buffer): string {
 }
 
 export function signOAuthState(
-  input: { uid: string; sid: string; cid?: string; name?: string; ws?: string },
+  input: { uid: string; sid: string; cid?: string; name?: string; ws?: string; origin?: string },
   hubSecret: string,
   ttlSec = 600,
 ): { state: string; nonce: string } {
@@ -31,6 +32,7 @@ export function signOAuthState(
   if (input.cid) payload.cid = input.cid;
   if (input.name) payload.name = input.name;
   if (input.ws) payload.ws = input.ws;
+  if (input.origin) payload.origin = input.origin;
   const body = Buffer.from(JSON.stringify(payload), "utf8");
   const sig = createHmac("sha256", hubSecret).update(body).digest();
   return { state: `${b64url(body)}.${b64url(sig)}`, nonce };

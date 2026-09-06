@@ -1,0 +1,460 @@
+/* 来源管理页（/connections）与删除确认弹层。暖纸 + 抹茶，节制的微动效。 */
+
+.hub-sources {
+  max-width: 940px;
+}
+
+.hub-lede {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  margin: 0.15rem 0 1.1rem;
+}
+
+.hub-flash {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0 0 0.9rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--paper);
+  font-size: 0.875rem;
+}
+
+.hub-add {
+  margin: 0.25rem 0 1.5rem;
+}
+
+.hub-add h2 {
+  margin: 0 0 0.35rem;
+}
+
+.hub-add-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+
+.hub-add-card {
+  display: block;
+  padding: 0.7rem 0.8rem;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  color: var(--ink);
+  transition: background 180ms var(--ease), transform 180ms var(--ease);
+}
+
+.hub-add-card:last-child { border-right: 0; }
+
+.hub-add-card:hover {
+  background: var(--paper);
+  text-decoration: none;
+  transform: translateY(-2px);
+}
+
+.hub-add-card strong {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.hub-add-card span {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.hub-group {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  padding: 0.85rem 1rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.hub-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem 0.8rem;
+}
+
+.hub-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.hub-group-title h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.hub-group-count {
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.05rem 0.5rem;
+  white-space: nowrap;
+}
+
+.hub-group-add {
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  color: var(--accent);
+  text-decoration: none;
+}
+.hub-group-add:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.hub-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.75rem;
+}
+
+.hub-tile {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.8rem 0.75rem;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--paper) 92%, transparent),
+    color-mix(in srgb, var(--bg) 70%, var(--paper))
+  );
+  transition: border-color 180ms var(--ease), transform 180ms var(--ease), box-shadow 180ms var(--ease);
+  animation: hub-tile-in 420ms var(--ease) both;
+}
+
+.hub-tile:hover {
+  border-color: color-mix(in srgb, var(--line) 40%, var(--accent));
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+@keyframes hub-tile-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.hub-tile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.hub-tile-name {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.hub-tile-stat {
+  margin-top: 0.35rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.hub-tile-stat b {
+  font-size: 1.35rem;
+  line-height: 1.1;
+  font-family: var(--font-display);
+  color: var(--accent);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.hub-tile-stat span {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.hub-tile-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 0.2rem;
+  overflow-wrap: anywhere;
+}
+
+.hub-tile-hint {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  border-left: 2px solid var(--accent);
+  padding-left: 0.45rem;
+}
+
+.hub-tile-err {
+  color: var(--danger);
+  font-size: 0.8125rem;
+  margin-top: 0.35rem;
+  overflow-wrap: anywhere;
+}
+
+.hub-tile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.hub-rename {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.hub-rename input { padding: 0.3rem 0.5rem; font-size: 0.875rem; }
+
+button.hub-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--line);
+}
+
+button.hub-danger:hover {
+  background: rgba(196, 92, 92, 0.1);
+  color: var(--danger);
+  border-color: var(--danger);
+  box-shadow: none;
+}
+
+button.hub-danger:active { background: rgba(196, 92, 92, 0.16); }
+
+button.hub-danger-solid {
+  background: var(--danger);
+  color: var(--on-accent);
+  border-color: transparent;
+}
+
+button.hub-danger-solid:hover {
+  background: #b35151;
+  color: var(--on-accent);
+  box-shadow: 0 6px 16px rgba(196, 92, 92, 0.24);
+}
+
+button.hub-danger-solid:active { background: #a74a4a; }
+
+/* ---- 删除确认弹层 ---- */
+
+.hub-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: var(--scrim, rgba(60, 51, 44, 0.28));
+  backdrop-filter: blur(2px);
+}
+
+.hub-dialog {
+  width: min(520px, 100%);
+  max-height: min(84vh, 720px);
+  overflow: auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lift, 0 22px 48px rgba(60, 51, 44, 0.22));
+  padding: 1.1rem 1.2rem 1.15rem;
+}
+
+.hub-dialog h2 {
+  margin: 0.1rem 0 0.15rem;
+  font-size: 1.15rem;
+}
+
+.hub-dialog-kicker {
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.hub-dialog-sub {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  margin: 0 0 0.7rem;
+}
+
+.hub-dialog-list {
+  list-style: none;
+  margin: 0.5rem 0 0.7rem;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+
+.hub-dialog-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0.1rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.875rem;
+}
+
+.hub-dialog-list li span { color: var(--muted); }
+
+.hub-dialog-list li b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.hub-dialog-note {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin: 0.5rem 0 0.15rem;
+  padding-left: 0.55rem;
+  border-left: 2px solid var(--accent);
+}
+
+.hub-dialog-warn {
+  font-size: 0.8125rem;
+  color: var(--danger);
+  margin: 0.45rem 0 0.15rem;
+  padding-left: 0.55rem;
+  border-left: 2px solid var(--danger);
+}
+
+.hub-dialog-check {
+  display: flex;
+  gap: 0.45rem;
+  align-items: flex-start;
+  margin: 0.8rem 0 0.15rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 0.875rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.hub-dialog-check input {
+  width: auto;
+  margin: 0.2rem 0 0;
+  accent-color: var(--danger);
+  cursor: pointer;
+}
+
+.hub-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+}
+
+.hub-empty {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.15rem;
+  color: var(--muted);
+  background: rgba(255, 250, 242, 0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-tile,
+  .hub-add-card { animation: none; transition: none; transform: none; }
+  .hub-tile:hover,
+  .hub-add-card:hover { transform: none; }
+  .hub-scrim { backdrop-filter: none; }
+}
+
+.hub-dialog-who {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin: 0 0 0.5rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow-wrap: anywhere;
+}
+
+/* 编辑视图里的删除区：与「保存并同步」隔开的一块，土陶色、克制。 */
+.hub-danger-zone {
+  max-width: 880px;
+  margin: 1.25rem 0 1rem;
+  padding: 0.9rem 1.05rem;
+  border: 1px dashed rgba(196, 92, 92, 0.45);
+  border-radius: var(--radius);
+  background: rgba(196, 92, 92, 0.045);
+}
+
+.hub-danger-zone h2 {
+  margin: 0 0 0.15rem;
+  font-size: 1rem;
+}
+
+.hub-danger-zone .hint { margin: 0 0 0.15rem; }
+
+.hub-danger-zone-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 760px) {
+  .hub-sources { max-width: 100%; }
+  .hub-add-grid { grid-template-columns: 1fr; }
+  .hub-add-card {
+    border-right: 0;
+    min-height: 44px;
+    padding: 0.85rem 0.9rem;
+  }
+  .hub-group { padding: 0.75rem 0.85rem 0.9rem; }
+  .hub-row-actions a,
+  .hub-row-actions button {
+    min-height: 44px;
+  }
+}
+
+
+/* ink: connections drawer / tiles use theme vars */
+html[data-theme="ink"] .hub-tile {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--paper) 96%, #000),
+    color-mix(in srgb, var(--bg) 85%, var(--paper))
+  );
+  color: var(--ink);
+}
+html[data-theme="ink"] .hub-tile:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: var(--shadow-lift);
+}
+html[data-theme="ink"] .hub-group,
+html[data-theme="ink"] .hub-dialog,
+html[data-theme="ink"] .hub-flash {
+  background: var(--paper);
+  border-color: var(--line);
+  color: var(--ink);
+}
+html[data-theme="ink"] .hub-scrim {
+  background: var(--scrim);
+}

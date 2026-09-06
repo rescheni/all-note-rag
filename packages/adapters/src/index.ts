@@ -12,4 +12,17 @@ export {
   notionBearerToken,
   refreshNotionAccessToken,
 } from "./notion-oauth.ts";
+export {
+  applyFeishuOAuthSecrets,
+  buildFeishuAuthorizeUrl,
+  buildFeishuQrGotoUrl,
+  exchangeFeishuAuthorizationCode,
+  feishuOAuthClient,
+  feishuUserAccessToken,
+  refreshFeishuAccessToken,
+  FEISHU_AUTHORIZE_URL,
+  FEISHU_QR_AUTHORIZE_URL,
+  FEISHU_OAUTH_SCOPES,
+  FEISHU_OAUTH_TOKEN_URL,
+} from "./feishu-oauth.ts";
 export { runFeishuContactsSync } from "./feishu-contacts-sync.ts";

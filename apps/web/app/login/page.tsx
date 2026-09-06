@@ -2,6 +2,7 @@
 import { FormEvent, useState } from "react";
 import { api, setToken } from "@/lib/api";
 import Link from "next/link";
+import { SignatureButton } from "../ui-motion";
 
 export default function LoginPage() {
   const [err, setErr] = useState("");
@@ -29,9 +30,13 @@ export default function LoginPage() {
         <input name="email" type="email" required />
         <label>密码</label>
         <input name="password" type="password" required />
-        <p><button type="submit">登录</button></p>
+        <p>
+          <SignatureButton type="submit">登录</SignatureButton>
+        </p>
       </form>
-      <p className="muted">没有账号？<Link href="/register">注册</Link></p>
+      <p className="muted">
+        没有账号？<Link href="/register">注册</Link>
+      </p>
     </div>
   );
 }

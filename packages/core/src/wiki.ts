@@ -105,6 +105,50 @@ export function guessContentType(path: string): string {
     case "md":
     case "txt":
       return "text/plain; charset=utf-8";
+    // Audio: Notion `audio` blocks, Feishu `file` blocks (block_type 23) holding audio.
+    case "mp3":
+      return "audio/mpeg";
+    case "wav":
+      return "audio/wav";
+    case "ogg":
+    case "oga":
+    case "opus":
+      return "audio/ogg";
+    case "m4a":
+      return "audio/mp4";
+    case "aac":
+      return "audio/aac";
+    case "flac":
+      return "audio/flac";
+    case "amr":
+      return "audio/amr";
+    case "wma":
+      return "audio/x-ms-wma";
+    // Video: Notion `video` blocks, Feishu `file` blocks (block_type 23) holding video.
+    case "mp4":
+    case "m4v":
+      return "video/mp4";
+    case "webm":
+      return "video/webm";
+    case "mov":
+    case "qt":
+      return "video/quicktime";
+    case "avi":
+      return "video/x-msvideo";
+    case "mkv":
+      return "video/x-matroska";
+    case "wmv":
+    case "asf":
+      return "video/x-ms-wmv";
+    case "flv":
+    case "f4v":
+      return "video/x-flv";
+    case "mpeg":
+    case "mpg":
+    case "mpv":
+      return "video/mpeg";
+    case "3gp":
+      return "video/3gpp";
     default:
       return "application/octet-stream";
   }
@@ -112,4 +156,28 @@ export function guessContentType(path: string): string {
 
 export function isImagePath(path: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg)$/i.test(path);
+}
+
+/** Audio attachment by extension. */
+export function isAudioPath(path: string): boolean {
+  return /\.(mp3|wav|ogg|oga|opus|m4a|aac|flac|amr|wma)$/i.test(path.split(/[?#]/)[0]);
+}
+
+/** Video attachment by extension. */
+export function isVideoPath(path: string): boolean {
+  return /\.(mp4|m4v|webm|mov|qt|avi|mkv|wmv|asf|flv|f4v|mpeg|mpg|mpv|3gp|amv)$/i.test(
+    path.split(/[?#]/)[0],
+  );
+}
+
+/** Playable in an HTML5 <audio>/<video> element. */
+export function isMediaPath(path: string): boolean {
+  return isAudioPath(path) || isVideoPath(path);
+}
+
+/** "audio" | "video" for media attachments, else null. */
+export function mediaKindOf(path: string): "audio" | "video" | null {
+  if (isAudioPath(path)) return "audio";
+  if (isVideoPath(path)) return "video";
+  return null;
 }

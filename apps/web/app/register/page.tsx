@@ -1,6 +1,7 @@
 "use client";
 import { FormEvent, useState } from "react";
 import { api, setToken } from "@/lib/api";
+import { SignatureButton } from "../ui-motion";
 
 export default function RegisterPage() {
   const [err, setErr] = useState("");
@@ -35,7 +36,9 @@ export default function RegisterPage() {
         <input name="email" type="email" required />
         <label>密码（至少 6 位）</label>
         <input name="password" type="password" required minLength={6} />
-        <p><button type="submit">创建账号</button></p>
+        <p>
+          <SignatureButton type="submit">创建账号</SignatureButton>
+        </p>
       </form>
     </div>
   );

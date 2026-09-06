@@ -1,8 +1,15 @@
 import { Hono } from "hono";
-import { buildActivitySeries } from "@note-hub/core";
+import {
+  buildActivityRange,
+  buildActivitySeries,
+  groupActivityByYear,
+  isYmd,
+  shanghaiYmd,
+} from "@note-hub/core";
 import { query } from "../db.ts";
 import { errors, jsonError } from "../errors.ts";
 import {
+  hashPassword,
   isSpaceRole,
   requireRole,
   requireUser,
@@ -10,6 +17,7 @@ import {
   type AuthUser,
   type SpaceRole,
 } from "../auth.ts";
+import { createUser } from "./auth.ts";
 
 type Vars = { user: AuthUser };
 export const spaceRoutes = new Hono<{ Variables: Vars }>();
@@ -210,37 +218,174 @@ spaceRoutes.delete("/spaces/:id/members/:userId", async (c) => {
   return c.json({ ok: true });
 });
 
+
+spaceRoutes.post("/spaces/:id/accounts", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const gate = await requireRole(user.id, id, "owner");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
+  const space = await loadSpace(id);
+  if (!space) return errors.notFound(c);
+  const body = (await c.req.json().catch(() => ({}))) as {
+    email?: unknown;
+    password?: unknown;
+    display_name?: unknown;
+    role?: unknown;
+  };
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+  const display_name = typeof body.display_name === "string" ? body.display_name.trim() : "";
+  const roleRaw = typeof body.role === "string" ? body.role.trim() : "viewer";
+  if (!email || !email.includes("@")) return jsonError(c, 400, "invalid_request", "需要有效邮箱");
+  if (password.length < 6) return jsonError(c, 400, "invalid_request", "密码至少 6 位");
+  if (!isSpaceRole(roleRaw)) return jsonError(c, 400, "invalid_request", "role 必须是 owner、editor 或 viewer");
+  const role: SpaceRole = roleRaw;
+
+  const existingUser = await query<{ id: string }>("SELECT id FROM users WHERE email = $1", [email]);
+  let targetId: string;
+  let createdUser: Record<string, unknown> | null = null;
+
+  if (existingUser.rows[0]) {
+    targetId = existingUser.rows[0].id;
+    const already = await query(
+      "SELECT 1 FROM space_members WHERE space_id = $1 AND user_id = $2",
+      [id, targetId],
+    );
+    if ((already.rowCount ?? 0) > 0) {
+      return jsonError(c, 409, "conflict", "该用户已是成员");
+    }
+    return jsonError(c, 409, "conflict", "该邮箱已注册，请用「添加成员」邀请已有账号");
+  } else {
+    const out = await createUser({
+      email,
+      password,
+      display_name: display_name || undefined,
+      withPersonalSpace: false,
+    });
+    targetId = out.user.id;
+    createdUser = out.user as unknown as Record<string, unknown>;
+  }
+
+  await query(
+    `INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, $3)`,
+    [id, targetId, role],
+  );
+  const member = await memberRow(id, targetId);
+  return c.json({ user: createdUser, member }, 201);
+});
+
+spaceRoutes.put("/spaces/:id/accounts/:userId/password", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const userId = c.req.param("userId");
+  if (!isUuid(userId)) return errors.notFound(c);
+  const gate = await requireRole(user.id, id, "owner");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
+  if (userId === user.id) {
+    return jsonError(c, 400, "invalid_request", "请使用「账号」页修改自己的密码");
+  }
+  const mem = await query(
+    "SELECT 1 FROM space_members WHERE space_id = $1 AND user_id = $2",
+    [id, userId],
+  );
+  if (!(mem.rowCount ?? 0)) return errors.notFound(c, "目标不是本空间成员");
+  const body = (await c.req.json().catch(() => ({}))) as { new_password?: unknown };
+  const next = typeof body.new_password === "string" ? body.new_password : "";
+  if (next.length < 6) return jsonError(c, 400, "invalid_request", "新密码至少 6 位");
+  const password_hash = await hashPassword(next);
+  await query("UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1", [
+    userId,
+    password_hash,
+  ]);
+  return c.json({ ok: true });
+});
+
 spaceRoutes.get("/spaces/:id/activity", async (c) => {
   const user = c.get("user");
   const id = c.req.param("id");
   const gate = await requireRole(user.id, id, "viewer");
   const denied = roleDenied(c, gate);
   if (denied) return denied;
-  const rawDays = Number(c.req.query("days") ?? 365);
-  const days = Number.isFinite(rawDays) ? Math.max(1, Math.min(366, Math.floor(rawDays))) : 365;
-  const since = new Date(Date.now() - days * 86400000);
-  const notes = await query<{ date: string; notes: number }>(
-    `SELECT to_char((coalesce(source_updated_at, updated_at) AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') AS date,
-            count(*)::int AS notes
-     FROM notes
-     WHERE space_id = $1 AND deleted_at IS NULL AND coalesce(source_updated_at, updated_at) >= $2
-     GROUP BY 1`,
-    [id, since],
-  );
-  const upserts = await query<{ date: string; upserts: number }>(
-    `SELECT to_char((r.finished_at AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') AS date,
-            coalesce(sum(r.upserts), 0)::int AS upserts
-     FROM sync_run r
-     INNER JOIN connections c ON c.id = r.connection_id
-     WHERE c.space_id = $1 AND r.finished_at IS NOT NULL AND r.finished_at >= $2
-     GROUP BY 1`,
-    [id, since],
-  );
-  return c.json({
-    days: buildActivitySeries({
-      days,
-      notes: notes.rows,
-      upserts: upserts.rows,
-    }),
+
+  const yearsAll = (c.req.query("years") ?? "").trim().toLowerCase() === "all";
+  const fromQ = (c.req.query("from") ?? "").trim();
+  const toQ = (c.req.query("to") ?? "").trim();
+  const wantRange = yearsAll || (isYmd(fromQ) && isYmd(toQ));
+
+  /** Per-day authoring stats from source_updated_at only (never hub updated_at). */
+  async function loadDayRows(since: Date) {
+    // Heat intensity uses chars; skip per-day block counts (was LATERAL over
+    // ~10k notes × 272k blocks ≈ 500–600ms). Tooltip still accepts blocks=0.
+    return query<{ date: string; notes: number; chars: number; blocks: number }>(
+      `SELECT to_char((source_updated_at AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') AS date,
+              count(*)::int AS notes,
+              coalesce(sum(char_length(coalesce(markdown, ''))), 0)::int AS chars,
+              0::int AS blocks
+       FROM notes
+       WHERE space_id = $1
+         AND deleted_at IS NULL
+         AND source_updated_at IS NOT NULL
+         AND source_updated_at >= $2
+       GROUP BY 1`,
+      [id, since],
+    );
+  }
+
+  if (!wantRange) {
+    const rawDays = Number(c.req.query("days") ?? 365);
+    const days = Number.isFinite(rawDays) ? Math.max(1, Math.min(366, Math.floor(rawDays))) : 365;
+    const since = new Date(Date.now() - days * 86400000);
+    const rows = await loadDayRows(since);
+    return c.json({
+      days: buildActivitySeries({
+        days,
+        rows: rows.rows,
+      }),
+      /** Heat intensity uses chars (字数); blocks/notes are secondary. */
+      intensity: "chars" as const,
+    });
+  }
+
+  const today = shanghaiYmd(new Date());
+  const maxYears = 10;
+  let from = isYmd(fromQ) ? fromQ : "";
+  let to = isYmd(toQ) ? toQ : today;
+
+  if (yearsAll || !from) {
+    const earliest = await query<{ d: string | null }>(
+      `SELECT to_char(min(source_updated_at AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') AS d
+       FROM notes
+       WHERE space_id = $1 AND deleted_at IS NULL AND source_updated_at IS NOT NULL`,
+      [id],
+    );
+    const minDate = earliest.rows[0]?.d;
+    from = minDate && isYmd(minDate) ? minDate : today;
+  }
+
+  if (from > to) {
+    const t = from;
+    from = to;
+    to = t;
+  }
+
+  const toYear = Number(to.slice(0, 4));
+  const fromYearRaw = Number(from.slice(0, 4));
+  const minYear = toYear - (maxYears - 1);
+  if (fromYearRaw < minYear) from = `${minYear}-01-01`;
+
+  const since = new Date(`${from}T00:00:00+08:00`);
+  since.setUTCDate(since.getUTCDate() - 1);
+
+  const rows = await loadDayRows(since);
+  const flat = buildActivityRange({
+    from,
+    to,
+    rows: rows.rows,
   });
+  const fromYear = Number(from.slice(0, 4));
+  const endYear = Number(to.slice(0, 4));
+  const years = groupActivityByYear(flat, { fromYear, toYear: endYear });
+  return c.json({ days: flat, years, from, to, intensity: "chars" as const });
 });

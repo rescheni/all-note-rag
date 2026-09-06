@@ -1,4 +1,5 @@
 import {
+  mediaKindOf,
   parseMarkdownLinks,
   sha256Hex,
   titleFromPath,
@@ -57,6 +58,20 @@ function elementsText(elements: unknown): string {
     .join("");
 }
 
+/**
+ * Feishu docx v1 numeric block_type values, from the official "块的数据结构" BlockType enum
+ * (open.feishu.cn/document/docs/docs/data-structure/block, mirrored at
+ * open.larkoffice.com/document/docs/docs/data-structure/block).
+ *
+ * NOTE: docx v1 has NO dedicated `audio` or `video` block_type. The enum runs 1-52 plus 999,
+ * and audio/video attachments are carried by the `file` block (23) — Feishu's own File example
+ * uses `"name": "VID_20231224_163819.mp4"`. Embedded third-party media (Bilibili / Youku /
+ * Watermelon) is the `iframe` block (26). So media coverage here is 23 + 27 + 26, not new numbers.
+ */
+const BLOCK_TYPE_FILE = 23;
+const BLOCK_TYPE_IFRAME = 26;
+const BLOCK_TYPE_IMAGE = 27;
+
 const BLOCK_KEY: Record<number, string> = {
   1: "page",
   2: "text",
@@ -96,8 +111,33 @@ function feishuBlockType(t: number): BlockType {
   if (t === 14) return "code";
   if (t === 15 || t === 19) return "quote";
   if (t === 31) return "table";
-  if (t === 27 || t === 23) return "embed";
+  if (t === BLOCK_TYPE_IMAGE || t === BLOCK_TYPE_FILE || t === BLOCK_TYPE_IFRAME) return "embed";
   return "unknown";
+}
+
+function feishuFileName(file: Dict | null, token: string): string {
+  return String(file?.name ?? "").trim() || token || "file";
+}
+
+function feishuImageName(img: Dict | null, token: string): string {
+  return String(img?.name ?? "").trim() || (token ? `${token}.png` : "image.png");
+}
+
+/** iframe.component.url is url-encoded per the docs; decode for a readable link. */
+function iframeUrl(block: Dict): string {
+  const component = asDict(asDict(block.iframe)?.component);
+  const raw = String(component?.url ?? "").trim();
+  if (!raw) return "";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/** Bare-attribute HTML5 player; src is the local asset name stored in MinIO. */
+function mediaPlayerMarkdown(tag: "audio" | "video", src: string): string {
+  return `<${tag} controls src="${src}"></${tag}>`;
 }
 
 export function feishuBlocksToMarkdown(blocks: unknown[]): {
@@ -149,18 +189,23 @@ export function feishuBlocksToMarkdown(blocks: unknown[]): {
       md = `> ${text}`;
     } else if (t === 22) {
       md = "---";
-    } else if (t === 27) {
+    } else if (t === BLOCK_TYPE_IMAGE) {
       const img = asDict(b.image);
-      const token = String(img?.token ?? "");
-      const name = String(img?.name ?? "").trim() || (token ? `${token}.png` : "image.png");
+      const name = feishuImageName(img, String(img?.token ?? ""));
       md = `![](${name})`;
       text = name;
-    } else if (t === 23) {
+    } else if (t === BLOCK_TYPE_FILE) {
       const file = asDict(b.file);
-      const token = String(file?.token ?? "");
-      const name = String(file?.name ?? "").trim() || token || "file";
-      md = `[${name}](${name})`;
+      const name = feishuFileName(file, String(file?.token ?? ""));
+      // A file block is also how Feishu stores audio/video; render a player for those.
+      const media = mediaKindOf(name);
+      md = media ? mediaPlayerMarkdown(media, name) : `[${name}](${name})`;
       text = name;
+    } else if (t === BLOCK_TYPE_IFRAME) {
+      // Embedded third-party media (Bilibili / Youku / ...). Not downloadable; keep the link.
+      const url = iframeUrl(b);
+      md = url ? `[${url}](${url})` : "";
+      text = url;
     } else {
       text = elementsText(blockElements(b));
       md = text;
@@ -244,8 +289,21 @@ export function normalizeFeishuNote(
   };
 }
 
-export type FeishuMediaRef = { token: string; name: string; kind: "image" | "file" };
+export type FeishuMediaRefKind = "image" | "file" | "audio" | "video";
+export type FeishuMediaRef = { token: string; name: string; kind: FeishuMediaRefKind };
 
+/**
+ * Every downloadable media token in a docx block list, keyed by the official numeric
+ * block_type values (see the BLOCK_TYPE_* note above):
+ *   27 image  -> kind "image"
+ *   23 file   -> kind "audio" / "video" when the file name says so, else "file"
+ * Feishu docx has no separate audio/video block_type, so 23 is where media actually lives.
+ * Inline media (`InlineFile` text elements) is deliberately not re-listed here: its
+ * `source_block_id` points at the very file block (23) already covered above, so listing it
+ * would only download the same token twice.
+ * iframe blocks (26) are third-party page embeds with no file token — nothing to download,
+ * they keep their url as a link in the markdown instead.
+ */
 export function feishuMediaRefs(blocks: unknown[]): FeishuMediaRef[] {
   const out: FeishuMediaRef[] = [];
   const seen = new Set<string>();
@@ -253,20 +311,19 @@ export function feishuMediaRefs(blocks: unknown[]): FeishuMediaRef[] {
     const b = asDict(raw);
     if (!b) continue;
     const t = Number(b.block_type);
-    if (t === 27) {
+    if (t === BLOCK_TYPE_IMAGE) {
       const img = asDict(b.image);
       const token = String(img?.token ?? "").trim();
       if (!token || seen.has(token)) continue;
       seen.add(token);
-      const name = String(img?.name ?? "").trim() || `${token}.png`;
-      out.push({ token, name, kind: "image" });
-    } else if (t === 23) {
+      out.push({ token, name: feishuImageName(img, token), kind: "image" });
+    } else if (t === BLOCK_TYPE_FILE) {
       const file = asDict(b.file);
       const token = String(file?.token ?? "").trim();
       if (!token || seen.has(token)) continue;
       seen.add(token);
-      const name = String(file?.name ?? "").trim() || token;
-      out.push({ token, name, kind: "file" });
+      const name = feishuFileName(file, token);
+      out.push({ token, name, kind: mediaKindOf(name) ?? "file" });
     }
   }
   return out;

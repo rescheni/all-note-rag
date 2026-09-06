@@ -34,5 +34,6 @@ ENV HOSTNAME=0.0.0.0
 ENV NEXT_PUBLIC_API_URL=http://api:3001
 COPY --from=build /app/apps/web/.next/standalone ./
 COPY --from=build /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=build /app/apps/web/public ./apps/web/public
 EXPOSE 3000
 CMD ["node", "apps/web/server.js"]

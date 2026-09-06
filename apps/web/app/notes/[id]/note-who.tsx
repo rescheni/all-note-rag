@@ -82,8 +82,8 @@ export function NoteWho({
   const hint = OPTIONS.find((o) => o.value === visibility)?.hint ?? "";
 
   return (
-    <section className="note-who" aria-label="谁可以看这篇">
-      <p className="note-who-title">谁可以看这篇</p>
+    <details className="note-who" aria-label="谁可以看这篇">
+      <summary className="note-who-title">谁可以看这篇 · {OPTIONS.find((o) => o.value === visibility)?.label}</summary>
       <div className="note-who-opts">
         {OPTIONS.map((o) => (
           <label key={o.value} className="note-who-opt">
@@ -130,6 +130,6 @@ export function NoteWho({
       )}
       {msg && <p className="muted">{msg}</p>}
       {err && <p className="err">{err}</p>}
-    </section>
+    </details>
   );
 }

@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
+import { prettyPath, shortPath } from "../notes/crumbs";
+import { SafeMarkdown } from "@/lib/safe-markdown";
 
 type Island = { id: string; title: string; path: string };
 
@@ -88,7 +90,7 @@ export default function WritingHealthPage() {
       {markdown && (
         <div className="card">
           <h2>报告</h2>
-          <pre className="report">{markdown}</pre>
+          <div className="report-md"><SafeMarkdown source={markdown} /></div>
         </div>
       )}
       {extra?.islands && extra.islands.length > 0 && (
@@ -98,7 +100,9 @@ export default function WritingHealthPage() {
             {extra.islands.map((n) => (
               <li key={n.id}>
                 <Link href={`/notes/${n.id}`}>{n.title}</Link>
-                <div className="muted">{n.path}</div>
+                <div className="muted note-path" title={prettyPath(n.path, n.title) || n.title}>
+                  {shortPath(n.path, 2, n.title) || n.title}
+                </div>
               </li>
             ))}
           </ul>

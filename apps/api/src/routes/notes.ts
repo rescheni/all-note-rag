@@ -1,18 +1,23 @@
 import { Hono } from "hono";
 import {
-  buildFileTree,
+  assembleSourceTree,
+  buildSourceGroups,
+  clipTreeToDepth,
+  findTreeNode,
   guessContentType,
   isAssetNoteId,
+  isMediaPath,
   isNoteAclVisibility,
   loadAiSettings,
   noteVisibleTo,
   parseNoteAcl,
   serializeNoteAcl,
-  toFtsTokens,
+  siyuanIconToEmoji,
   toTsQueryTokens,
   type NoteAcl,
+  type TreeInput,
 } from "@note-hub/core";
-import { renderPreviewHtml, rewritePreviewAssetUrls } from "@note-hub/preview";
+import { isCurrentPreviewHtml, renderPreviewHtml, rewritePreviewAssetUrls, type PreviewBacklink, type PreviewNoteLink } from "@note-hub/preview";
 import {
   averageVectors,
   clipQuote,
@@ -26,7 +31,7 @@ import { query } from "../db.ts";
 import { env } from "../env.ts";
 import { errors, jsonError } from "../errors.ts";
 import { loadMembership, requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
-import { getObjectBytes, getObjectText } from "../s3.ts";
+import { getObjectBytes, getObjectText, putObject } from "../s3.ts";
 import { extractBlocks } from "@note-hub/normalize";
 
 type Vars = { user: AuthUser };
@@ -86,7 +91,10 @@ noteRoutes.get("/spaces/:id/notes", async (c) => {
   const gate = await requireRole(user.id, spaceId, "viewer");
   const denied = roleDenied(c, gate);
   if (denied) return denied;
-  const path = c.req.query("path");
+  const pathRaw = c.req.query("path") ?? "";
+  const path = pathRaw.startsWith("src:") || pathRaw.startsWith("conn:") ? "" : pathRaw;
+  const connectionId = c.req.query("connection_id");
+  const source = c.req.query("source");
   const q = c.req.query("q");
   const params: unknown[] = [spaceId];
   let sql = `SELECT id, space_id, connection_id, source_id, path, title, hash, updated_at
@@ -99,6 +107,13 @@ noteRoutes.get("/spaces/:id/notes", async (c) => {
     params.push(prefix);
     params.push(prefix + "/");
     sql += ` AND (path = $${params.length - 1} OR path LIKE ($${params.length} || '%'))`;
+  }
+  if (connectionId) {
+    params.push(connectionId);
+    sql += ` AND connection_id = $${params.length}`;
+  } else if (source) {
+    params.push(source);
+    sql += ` AND connection_id IN (SELECT id FROM connections WHERE space_id = $1 AND source = $${params.length})`;
   }
   if (q) {
     params.push("%" + q + "%");
@@ -143,6 +158,12 @@ noteRoutes.get("/spaces/:id/tree", async (c) => {
   const gate = await requireRole(user.id, spaceId, "viewer");
   const denied = roleDenied(c, gate);
   if (denied) return denied;
+  const parent = (c.req.query("parent") ?? "").replace(/\/+$/, "");
+  const connectionFilter = c.req.query("connection_id") ?? "";
+  // Lazy expand: when $5 (parent) is set, only that folder's descendants are loaded.
+  // Empty $5 keeps the whole vault (root / bookshelf open).
+  const parentScope = `($5::text = '' OR n.path = $5 OR n.path = ($5 || '.sy') OR n.path LIKE ($5 || '/%') OR n.path LIKE ($5 || '.sy/%'))`;
+  const assetScope = `($5::text = '' OR a.source_path = $5 OR a.source_path LIKE ($5 || '/%') OR n.path = $5 OR n.path = ($5 || '.sy') OR n.path LIKE ($5 || '/%') OR n.path LIKE ($5 || '.sy/%'))`;
   try {
     const notes = await query<{
       id: string;
@@ -152,8 +173,10 @@ noteRoutes.get("/spaces/:id/tree", async (c) => {
       connection_id: string;
       source: string;
       connection_name: string;
+      icon: string | null;
     }>(
-      `SELECT n.id, n.path, n.title, n.source_id, n.connection_id, c.source, c.name AS connection_name
+      `SELECT n.id, n.path, n.title, n.source_id, n.connection_id, c.source, c.name AS connection_name,
+              NULLIF(TRIM(n.frontmatter->>'icon'), '') AS icon
        FROM notes n
        INNER JOIN connections c ON c.id = n.connection_id
        WHERE n.space_id = $1 AND n.deleted_at IS NULL
@@ -161,8 +184,10 @@ noteRoutes.get("/spaces/:id/tree", async (c) => {
          AND n.path !~* '\\.(png|jpe?g|gif|webp|svg)$'
          AND n.path NOT ILIKE 'assets/%'
          AND n.path NOT ILIKE 'data/assets/%'
+         AND ($4::text = '' OR n.connection_id = $4::uuid)
+         AND ${parentScope}
          AND note_visible_to(n.acl_snapshot, $2::uuid, $3::text)`,
-      [spaceId, user.id, gate.mem.role],
+      [spaceId, user.id, gate.mem.role, connectionFilter, parent],
     );
     const assets = await query<{
       id: string;
@@ -185,30 +210,37 @@ noteRoutes.get("/spaces/:id/tree", async (c) => {
          AND n.path NOT ILIKE 'assets/%'
          AND n.path NOT ILIKE 'data/assets/%'
          AND a.source_path !~* '\\.(png|jpe?g|gif|webp|svg)$'
+         AND ($4::text = '' OR n.connection_id = $4::uuid)
+         AND ${assetScope}
          AND note_visible_to(n.acl_snapshot, $2::uuid, $3::text)`,
-      [spaceId, user.id, gate.mem.role],
+      [spaceId, user.id, gate.mem.role, connectionFilter, parent],
     );
-    const conns = await query<{ id: string; cursor: unknown; config: unknown }>(
-      `SELECT id, cursor, config FROM connections WHERE space_id = $1`,
+    const conns = await query<{ id: string; source: string; name: string; cursor: unknown; config: unknown }>(
+      `SELECT id, source, name, cursor, config FROM connections WHERE space_id = $1`,
       [spaceId],
     );
     const boxNamesByConnection: Record<string, Record<string, string>> = {};
-    for (const row of conns.rows) {
+    const connections = conns.rows.map((row) => {
       boxNamesByConnection[row.id] = boxNamesFromConn(row.cursor, row.config);
-    }
-    const items = [
+      return { id: row.id, source: row.source, name: row.name };
+    });
+    const items: TreeInput[] = [
       ...notes.rows
         .filter((n) => !isAssetNoteId(n.source_id))
-        .map((n) => ({
-          path: n.path,
-          kind: "note" as const,
-          note_id: n.id,
-          title: n.title,
-          source: n.source,
-          source_id: n.source_id,
-          connection_id: n.connection_id,
-          connection_name: n.connection_name,
-        })),
+        .map((n) => {
+          const emoji = n.icon ? siyuanIconToEmoji(n.icon) : "";
+          return {
+            path: n.path,
+            kind: "note" as const,
+            note_id: n.id,
+            title: n.title,
+            source: n.source,
+            source_id: n.source_id,
+            connection_id: n.connection_id,
+            connection_name: n.connection_name,
+            icon: emoji || null,
+          };
+        }),
       ...assets.rows
         .filter((a) => !isAssetNoteId(a.note_source_id))
         .map((a) => ({
@@ -223,12 +255,34 @@ noteRoutes.get("/spaces/:id/tree", async (c) => {
           connection_name: a.connection_name,
         })),
     ];
-    return c.json({
-      tree: buildFileTree(items, { groupBySource: true, boxNamesByConnection }),
+    // Root: clipDepth 1 — never materialize the full vault tree just to strip it.
+    // Parent expand: SQL already scopes rows; build that subtree then clip children to 1.
+    const groups = buildSourceGroups(items, {
+      boxNamesByConnection,
+      connections: connectionFilter ? connections.filter((x) => x.id === connectionFilter) : connections,
+      clipDepth: parent ? undefined : 1,
     });
+    if (parent) {
+      for (const g of groups) {
+        if (connectionFilter && g.connection_id !== connectionFilter) continue;
+        const node = findTreeNode(g.tree, parent);
+        if (node) {
+          return c.json({ tree: clipTreeToDepth(node.children ?? [], 1), groups: [] });
+        }
+      }
+      return c.json({ tree: [], groups: [] });
+    }
+    const payload = groups.map((g) => ({
+      source: g.source,
+      connection_id: g.connection_id,
+      name: g.name,
+      // Already built shallow; clip again for a stable wire shape (no nested children).
+      tree: clipTreeToDepth(g.tree, 1),
+    }));
+    return c.json({ groups: payload, tree: assembleSourceTree(payload) });
   } catch (e) {
     console.error(JSON.stringify({ level: "error", message: "tree failed", error: String(e) }));
-    return c.json({ tree: [] });
+    return c.json({ tree: [], groups: [] });
   }
 });
 
@@ -290,6 +344,202 @@ noteRoutes.patch("/notes/:id/acl", async (c) => {
   return c.json({ note: { ...publicNote(note, acl), acl: snapshot }, can_patch_acl: true });
 });
 
+
+type NoteLinkDbRow = {
+  raw_link: string;
+  label: string;
+  target_note_id: string | null;
+  heading: string | null;
+  link_kind: string;
+  source_offset: number;
+  raw_target: string;
+  native_target_id: string | null;
+};
+
+const SIYUAN_ID_RE = /^\d{14}-[a-z0-9]+$/i;
+
+function looksLikePlaceholderLinkLabel(label: string): boolean {
+  const t = (label ?? "").trim().replace(/\.sy$/i, "");
+  return !t || t === "引用块" || SIYUAN_ID_RE.test(t);
+}
+
+function stripLinkMarkup(text: string): string {
+  return text
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[*_`#]+/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&nbsp;/g, " ");
+}
+
+function truncateLabel(text: string, max = 40): string {
+  const one = text.replace(/\s+/g, " ").trim();
+  if (!one) return "";
+  return one.length > max ? `${one.slice(0, max)}…` : one;
+}
+
+/** Prefer real block text / target title over stored 「引用块」 or bare SiYuan ids. */
+function resolvePreviewLinkLabel(row: {
+  label: string;
+  target_title: string | null;
+  block_text: string | null;
+}): string {
+  const stored = (row.label ?? "").trim();
+  if (!looksLikePlaceholderLinkLabel(stored)) return stored;
+  const fromBlock = truncateLabel(stripLinkMarkup(row.block_text ?? ""));
+  if (fromBlock) return fromBlock;
+  const fromTitle = truncateLabel(row.target_title ?? "");
+  if (fromTitle) return fromTitle;
+  return stored || "引用块";
+}
+
+async function loadOutgoingPreviewLinks(noteId: string): Promise<PreviewNoteLink[]> {
+  const r = await query<
+    NoteLinkDbRow & { resolved_target_id: string | null; target_source_id: string | null; target_title: string | null; block_text: string | null }
+  >(
+    `SELECT l.raw_link, l.label, l.target_note_id, l.heading, l.link_kind, l.source_offset, l.raw_target, l.native_target_id,
+            t.id AS resolved_target_id, t.source_id AS target_source_id, t.title AS target_title,
+            b.text AS block_text
+     FROM note_links l
+     LEFT JOIN LATERAL (
+       SELECT id, source_id, title
+       FROM notes
+       WHERE (
+         id = l.target_note_id
+         OR (NULLIF(l.native_target_id, '') IS NOT NULL AND source_id = l.native_target_id)
+         OR (NULLIF(l.raw_target, '') IS NOT NULL AND source_id = l.raw_target)
+       )
+       ORDER BY (deleted_at IS NULL) DESC, (id = l.target_note_id) DESC NULLS LAST
+       LIMIT 1
+     ) t ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT text FROM blocks
+       WHERE source_block_id = l.native_target_id
+         AND (t.id IS NULL OR note_id = t.id)
+       LIMIT 1
+     ) b ON TRUE
+     WHERE l.source_note_id = $1
+     ORDER BY l.source_offset`,
+    [noteId],
+  );
+  return r.rows.map((row) => {
+    // Wiki [[Note#heading]] keeps heading; block_ref uses native_target_id so href is /notes/<id>#b-<block>.
+    // Doc-level refs (native id == note source_id) omit the fragment — no matching section id.
+    const heading = (row.heading ?? "").trim();
+    const native = (row.native_target_id ?? "").trim();
+    const docId = (row.target_source_id ?? "").trim();
+    const fragment = heading || (native && native !== docId ? native : "") || undefined;
+    return {
+      raw: row.raw_link,
+      label: resolvePreviewLinkLabel(row),
+      targetNoteId: row.target_note_id || row.resolved_target_id,
+      heading: fragment,
+    };
+  });
+}
+
+/** Overlay DB source_block_ids onto extractBlocks so preview sections match #b-<native_id>. */
+async function loadPreviewBlocks(noteId: string, markdownBody: string) {
+  const extracted = extractBlocks(markdownBody);
+  const r = await query<{
+    source_block_id: string;
+    type: string;
+    text: string | null;
+    order_key: string;
+    depth: number;
+  }>(
+    `SELECT source_block_id, type, text, order_key, depth
+     FROM blocks
+     WHERE note_id = $1 AND source_block_id NOT LIKE 'asset%'
+     ORDER BY order_key`,
+    [noteId],
+  );
+  if (!r.rows.length) return extracted;
+
+  const pool = r.rows.map((row, i) => ({
+    row,
+    i,
+    norm: (row.text ?? "").replace(/\s+/g, " ").trim(),
+  }));
+  const used = new Set<number>();
+  let mapped = 0;
+  const out = extracted.map((ex) => {
+    const exNorm = (ex.text || ex.markdown || "").replace(/\s+/g, " ").trim();
+    if (!exNorm) return ex;
+    let bestI = -1;
+    let bestScore = 0;
+    for (const p of pool) {
+      if (used.has(p.i) || !p.norm) continue;
+      if (p.row.type !== ex.type) continue;
+      let score = 0;
+      if (p.norm === exNorm) score = 1;
+      else if (exNorm.includes(p.norm) || p.norm.includes(exNorm)) {
+        score = Math.min(p.norm.length, exNorm.length) / Math.max(p.norm.length, exNorm.length);
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestI = p.i;
+      }
+    }
+    if (bestI >= 0 && bestScore >= 0.45) {
+      used.add(bestI);
+      mapped += 1;
+      return { ...ex, source_block_id: pool[bestI].row.source_block_id };
+    }
+    return ex;
+  });
+
+  if (mapped >= Math.min(3, Math.ceil(r.rows.length * 0.15))) return out;
+
+  // Low match rate: render from DB blocks so #b-<native_id> anchors still exist.
+  return r.rows.map((row) => {
+    const text = row.text ?? "";
+    let markdown = text;
+    if (row.type === "heading") {
+      const d = Math.min(6, Math.max(1, row.depth || 1));
+      markdown = `${"#".repeat(d)} ${text}`;
+    } else if (row.type === "code") {
+      markdown = text.startsWith("```") ? text : "```\n" + text + "\n```";
+    } else if (row.type === "quote") {
+      markdown = text
+        .split("\n")
+        .map((l) => (l.startsWith(">") ? l : `> ${l}`))
+        .join("\n");
+    } else if (row.type === "list") {
+      const lines = text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+      markdown = lines.map((l) => (/^[-*+\d.]/.test(l) ? l : `- ${l}`)).join("\n");
+    }
+    return {
+      source_block_id: row.source_block_id,
+      type: row.type as (typeof extracted)[number]["type"],
+      text,
+      markdown,
+      order_key: row.order_key,
+      depth: row.depth,
+    };
+  });
+}
+
+async function loadVisibleBacklinks(
+  noteId: string,
+  userId: string,
+  role: string,
+): Promise<PreviewBacklink[]> {
+  const r = await query<{ note_id: string; title: string; path: string }>(
+    `SELECT DISTINCT ON (n.id) n.id AS note_id, n.title, n.path
+     FROM note_links l
+     INNER JOIN notes n ON n.id = l.source_note_id AND n.deleted_at IS NULL
+     WHERE l.target_note_id = $1
+       AND note_visible_to(n.acl_snapshot, $2::uuid, $3::text)
+     ORDER BY n.id, n.title`,
+    [noteId, userId, role],
+  );
+  return r.rows.map((row) => ({ noteId: row.note_id, title: row.title, path: row.path }));
+}
+
 noteRoutes.get("/notes/:id/blocks", async (c) => {
   const user = c.get("user");
   const loaded = await noteIfMember(user.id, c.req.param("id"));
@@ -303,6 +553,73 @@ noteRoutes.get("/notes/:id/blocks", async (c) => {
   return c.json({ blocks: r.rows });
 });
 
+noteRoutes.get("/notes/:id/links", async (c) => {
+  const user = c.get("user");
+  const loaded = await noteIfMember(user.id, c.req.param("id"));
+  if (!loaded) return errors.notFound(c);
+  const note = loaded.note;
+  const outgoingRows = await query<{
+    id: string;
+    raw_link: string;
+    raw_target: string;
+    label: string;
+    link_kind: string;
+    source_offset: number;
+    heading: string | null;
+    native_target_id: string | null;
+    target_note_id: string | null;
+    target_title: string | null;
+    target_path: string | null;
+    block_text: string | null;
+  }>(
+    `SELECT l.id, l.raw_link, l.raw_target, l.label, l.link_kind, l.source_offset, l.heading, l.native_target_id,
+            COALESCE(l.target_note_id, t.id) AS target_note_id, t.title AS target_title, t.path AS target_path, b.text AS block_text
+     FROM note_links l
+     LEFT JOIN LATERAL (
+       SELECT id, title, path
+       FROM notes
+       WHERE (
+         id = l.target_note_id
+         OR (NULLIF(l.native_target_id, '') IS NOT NULL AND source_id = l.native_target_id)
+         OR (NULLIF(l.raw_target, '') IS NOT NULL AND source_id = l.raw_target)
+       )
+       ORDER BY (deleted_at IS NULL) DESC, (id = l.target_note_id) DESC NULLS LAST
+       LIMIT 1
+     ) t ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT text FROM blocks
+       WHERE source_block_id = l.native_target_id
+         AND (t.id IS NULL OR note_id = t.id)
+       LIMIT 1
+     ) b ON TRUE
+     WHERE l.source_note_id = $1
+     ORDER BY l.source_offset`,
+    [note.id],
+  );
+  const backlinks = await loadVisibleBacklinks(note.id, user.id, loaded.mem.role);
+  return c.json({
+    outgoing: outgoingRows.rows.map((row) => ({
+      id: row.id,
+      raw: row.raw_link,
+      raw_target: row.raw_target,
+      label: resolvePreviewLinkLabel(row),
+      kind: row.link_kind,
+      offset: row.source_offset,
+      heading: row.heading,
+      native_target_id: row.native_target_id,
+      target_note_id: row.target_note_id,
+      target_title: row.target_title,
+      target_path: row.target_path,
+      resolved: Boolean(row.target_note_id),
+    })),
+    backlinks: backlinks.map((b) => ({
+      note_id: b.noteId,
+      title: b.title,
+      path: b.path,
+    })),
+  });
+});
+
 noteRoutes.get("/notes/:id/preview", async (c) => {
   const user = c.get("user");
   const loaded = await noteIfMember(user.id, c.req.param("id"));
@@ -310,25 +627,42 @@ noteRoutes.get("/notes/:id/preview", async (c) => {
   const note = loaded.note;
   const key = `preview/${note.space_id}/${note.id}/${note.hash}.html`;
   const assetBase = `/v1/notes/${note.id}/assets?path=`;
-  let html = await getObjectText(key);
-  if (!html) {
-    const canon = await getObjectText(`canonical/${note.space_id}/${note.id}/note.md`);
-    const markdown = canon ?? note.markdown ?? "";
-    const blocks = extractBlocks(stripFm(markdown));
-    html = renderPreviewHtml({
+  // Always refresh with live note_links + ACL-filtered backlinks (S3 cache alone goes stale on reverse edges).
+  const canon = await getObjectText(`canonical/${note.space_id}/${note.id}/note.md`);
+  const markdown = canon ?? note.markdown ?? "";
+  const blocks = await loadPreviewBlocks(note.id, stripFm(markdown));
+  const links = await loadOutgoingPreviewLinks(note.id);
+  const backlinks = await loadVisibleBacklinks(note.id, user.id, loaded.mem.role);
+  let html = renderPreviewHtml(
+    {
       title: note.title,
       blocks,
       hash: note.hash,
       path: note.path,
-    }, { assetBase });
+    },
+    { assetBase, links, backlinks },
+  );
+  try {
+    await putObject(key, html, "text/html; charset=utf-8");
+  } catch {
+    /* still serve the fresh render */
   }
   html = rewritePreviewAssetUrls(html, assetBase);
+  void isCurrentPreviewHtml;
   const wantJson = (c.req.query("format") ?? c.req.header("accept") ?? "").includes("json");
-  if (wantJson) return c.json({ html, hash: note.hash });
+  if (wantJson) return c.json({ html, hash: note.hash, links, backlinks });
   return new Response(html, {
     headers: { "content-type": "text/html; charset=utf-8", "x-note-hash": note.hash },
   });
 });
+
+
+function contentDispositionHeader(kind: "inline" | "attachment", filename: string): string {
+  const safe = filename.replace(/"/g, "").trim() || "file";
+  const ascii = safe.replace(/[^\x20-\x7E]/g, "_") || "file";
+  const star = encodeURIComponent(safe).replace(/['()]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${star}`;
+}
 
 noteRoutes.get("/notes/:id/assets", async (c) => {
   const user = c.get("user");
@@ -347,12 +681,25 @@ noteRoutes.get("/notes/:id/assets", async (c) => {
   const key = row.rows[0]?.s3_key || `canonical/${note.space_id}/${note.id}/assets/${base}`;
   const bytes = await getObjectBytes(key);
   if (!bytes) return errors.notFound(c);
-  const type = row.rows[0]?.content_type || guessContentType(p);
-  const disposition = type.startsWith("image/") || type === "application/pdf" ? "inline" : "attachment";
+  const stored = row.rows[0]?.content_type || "";
+  const guessed = guessContentType(p);
+  // SiYuan often stores playable media as application/octet-stream — remint by extension.
+  let type = stored;
+  if (!type || type === "application/octet-stream") {
+    if (guessed !== "application/octet-stream") type = guessed;
+    else type = stored || guessed;
+  }
+  const inline =
+    type.startsWith("image/") ||
+    type.startsWith("audio/") ||
+    type.startsWith("video/") ||
+    type === "application/pdf" ||
+    isMediaPath(p) ||
+    isMediaPath(base);
   return new Response(Buffer.from(bytes), {
     headers: {
-      "content-type": type,
-      "content-disposition": `${disposition}; filename="${base.replace(/"/g, "")}"`,
+      "content-type": type || "application/octet-stream",
+      "content-disposition": contentDispositionHeader(inline ? "inline" : "attachment", base),
     },
   });
 });
@@ -425,6 +772,33 @@ async function noteAverageEmbedding(noteId: string): Promise<number[]> {
   return averageVectors(vecs);
 }
 
+const SEARCH_SIMILAR_BUDGET_MS = 400;
+
+function withBudget<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      resolve(fallback);
+    }, ms);
+    p.then(
+      (v) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(v);
+      },
+      () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
 noteRoutes.get("/spaces/:id/search", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
@@ -435,44 +809,91 @@ noteRoutes.get("/spaces/:id/search", async (c) => {
   if (!q) return c.json({ query: q, results: [], similar: [] });
   const like = "%" + q + "%";
   const tokens = toTsQueryTokens(q);
+  const fts = tokens || "";
+  const similarStarted = Date.now();
+  const similarWork = (async () => {
+    const ai = await loadAiSettings(query, env.hubSecret);
+    const [emb] = await embedTexts([q], {
+      baseUrl: ai.base_url,
+      apiKey: ai.api_key,
+      model: ai.embedding_model,
+    });
+    if (!emb?.length) return [] as Awaited<ReturnType<typeof similarNotesInSpace>>;
+    // exclude filled after keyword query; placeholder until then
+    return { emb } as { emb: number[] };
+  })();
+  // Fast path: title/path ILIKE + capped GIN FTS on chunks.
+  // Avoid notes.markdown ILIKE and chunks.text ILIKE (full-corpus sequential scans).
   const results = await query<{
     id: string;
     title: string;
     path: string;
+    connection_id: string;
     snippet: string | null;
     source_block_id: string | null;
     match: "keyword" | "path";
   }>(
-    `SELECT n.id, n.title, n.path,
-            COALESCE(c.snippet, left(n.markdown, 180)) AS snippet,
+    `WITH title_path AS (
+       SELECT n.id,
+              (CASE WHEN n.title ILIKE $2 THEN 2.0 ELSE 0 END
+               + CASE WHEN n.path ILIKE $2 THEN 1.5 ELSE 0 END)::float8 AS base_rank,
+              CASE WHEN n.path ILIKE $2 THEN 'path'::text ELSE 'keyword'::text END AS match
+       FROM notes n
+       WHERE n.space_id = $1 AND n.deleted_at IS NULL
+         AND note_visible_to(n.acl_snapshot, $4::uuid, $5::text)
+         AND (n.title ILIKE $2 OR n.path ILIKE $2)
+     ),
+     fts_notes AS (
+       SELECT ch.note_id AS id,
+              max(CASE WHEN $3 <> '' THEN ts_rank(ch.fts, to_tsquery('simple', $3)) ELSE 0 END)::float8 AS base_rank,
+              'keyword'::text AS match
+       FROM chunks ch
+       INNER JOIN notes n ON n.id = ch.note_id AND n.deleted_at IS NULL
+       WHERE $3 <> ''
+         AND n.space_id = $1 AND ch.space_id = $1
+         AND CASE WHEN $3 <> '' THEN ch.fts @@ to_tsquery('simple', $3) ELSE false END
+         AND note_visible_to(n.acl_snapshot, $4::uuid, $5::text)
+       GROUP BY ch.note_id
+       ORDER BY max(CASE WHEN $3 <> '' THEN ts_rank(ch.fts, to_tsquery('simple', $3)) ELSE 0 END) DESC
+       LIMIT 50
+     ),
+     combined AS (
+       SELECT id,
+              max(base_rank) AS base_rank,
+              CASE WHEN bool_or(match = 'path') THEN 'path'::text ELSE 'keyword'::text END AS match
+       FROM (
+         SELECT * FROM title_path
+         UNION ALL
+         SELECT * FROM fts_notes
+       ) u
+       GROUP BY id
+     )
+     SELECT n.id, n.title, n.path, n.connection_id,
+            COALESCE(c.snippet, left(COALESCE(n.markdown, ''), 180)) AS snippet,
             c.source_block_id,
-            CASE WHEN n.path ILIKE $2 THEN 'path' ELSE 'keyword' END AS match
-     FROM notes n
+            m.match
+     FROM combined m
+     INNER JOIN notes n ON n.id = m.id
      LEFT JOIN LATERAL (
-       SELECT ch.text AS snippet, b.source_block_id,
-              ts_rank(ch.fts, to_tsquery('simple', $3)) AS rank
+       SELECT left(ch.text, 180) AS snippet, b.source_block_id,
+              CASE WHEN $3 <> '' THEN ts_rank(ch.fts, to_tsquery('simple', $3)) ELSE 0::float4 END AS rank
        FROM chunks ch
        LEFT JOIN blocks b ON b.id = ch.block_id
        WHERE ch.note_id = n.id
-         AND ($3 <> '' AND ch.fts @@ to_tsquery('simple', $3) OR ch.text ILIKE $2)
+         AND $3 <> ''
+         AND CASE WHEN $3 <> '' THEN ch.fts @@ to_tsquery('simple', $3) ELSE false END
        ORDER BY rank DESC NULLS LAST
        LIMIT 1
      ) c ON true
-     CROSS JOIN LATERAL (
-       SELECT CASE WHEN n.title ILIKE $2 THEN 1.0 ELSE 0 END AS similarity_title
-     ) t
-     WHERE n.space_id = $1 AND n.deleted_at IS NULL
-       AND note_visible_to(n.acl_snapshot, $4::uuid, $5::text)
-       AND (n.title ILIKE $2 OR n.markdown ILIKE $2 OR n.path ILIKE $2
-            OR ($3 <> '' AND c.rank IS NOT NULL))
-     ORDER BY GREATEST(c.rank, t.similarity_title) DESC NULLS LAST, n.updated_at DESC
+     ORDER BY GREATEST(m.base_rank, COALESCE(c.rank, 0)) DESC NULLS LAST, n.updated_at DESC
      LIMIT 30`,
-    [spaceId, like, tokens || "", user.id, gate.mem.role],
+    [spaceId, like, fts, user.id, gate.mem.role],
   );
   const sourceHits = results.rows.map((row) => ({
     note_id: row.id,
     title: row.title,
     path: row.path,
+    connection_id: row.connection_id,
     snippet: clipQuote(row.snippet ?? "", 180),
     source_block_id: row.source_block_id,
     preview_url: previewUrl(row.id, row.source_block_id),
@@ -480,25 +901,28 @@ noteRoutes.get("/spaces/:id/search", async (c) => {
   }));
   let similar: Awaited<ReturnType<typeof similarNotesInSpace>> = [];
   try {
-    const ai = await loadAiSettings(query, env.hubSecret);
-    const [emb] = await embedTexts([q], {
-      baseUrl: ai.base_url,
-      apiKey: ai.api_key,
-      model: ai.embedding_model,
+    const remaining = Math.max(50, SEARCH_SIMILAR_BUDGET_MS - (Date.now() - similarStarted));
+    const embPhase = await withBudget(similarWork, remaining, null);
+    void similarWork.catch((e) => {
+      console.error(JSON.stringify({ level: "error", message: "embed query failed", error: String(e) }));
     });
-    if (emb?.length) {
-      similar = await similarNotesInSpace(
-        spaceId,
-        emb,
-        sourceHits.map((h) => h.note_id),
-        user.id,
-        gate.mem.role,
+    if (embPhase && "emb" in embPhase && embPhase.emb?.length) {
+      const left = Math.max(50, SEARCH_SIMILAR_BUDGET_MS - (Date.now() - similarStarted));
+      similar = await withBudget(
+        similarNotesInSpace(
+          spaceId,
+          embPhase.emb,
+          sourceHits.map((h) => h.note_id),
+          user.id,
+          gate.mem.role,
+        ),
+        left,
+        [],
       );
     }
   } catch (e) {
     console.error(JSON.stringify({ level: "error", message: "embed query failed", error: String(e) }));
   }
-  void toFtsTokens;
   return c.json({ query: q, results: sourceHits, similar });
 });
 

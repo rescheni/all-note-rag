@@ -7,10 +7,17 @@ export * from "./secrets.ts";
 export * from "./wiki.ts";
 export * from "./errors.ts";
 export * from "./connection-validate.ts";
+export * from "./icon.ts";
 export * from "./tree.ts";
 export * from "./activity.ts";
 export * from "./ai-settings.ts";
+export * from "./ambient-settings.ts";
+export * from "./theme-settings.ts";
 export * from "./source-updated.ts";
 export * from "./acl.ts";
 export * from "./oauth-state.ts";
+export * from "./oauth-origin.ts";
 export * from "./feishu-contacts.ts";
+
+export * from "./note-links.ts";
+export * from "./note-link-store.ts";

@@ -71,6 +71,11 @@ describe("tree / activity / settings", () => {
       [spaceId],
     );
     obConn = ob.rows[0].id;
+    await pool.query(
+      `INSERT INTO connections (space_id, source, name, config, status)
+       VALUES ($1, 'feishu', '飞书', '{"e2ee":false}'::jsonb, 'active')`,
+      [spaceId],
+    );
 
     await pool.query(
       `INSERT INTO notes (space_id, connection_id, source_id, path, title, markdown, hash, updated_at)
@@ -98,28 +103,52 @@ describe("tree / activity / settings", () => {
   it("GET /tree groups by source, uses titles, nests parent.sy/child.sy, maps box names", async () => {
     const r = await get(`/v1/spaces/${spaceId}/tree`, token);
     expect(r.status).toBe(200);
-    const roots = r.body.tree as { name: string; path: string; kind: string; children?: unknown[] }[];
-    const names = roots.map((n) => n.name).sort();
-    expect(names).toEqual(["Obsidian", "我的思源"].sort());
-    const sy = roots.find((n) => n.name === "我的思源") as {
-      children: {
+    const groups = r.body.groups as {
+      source: string;
+      connection_id: string;
+      name: string;
+      tree: {
         name: string;
         path: string;
         kind: string;
+        has_children?: boolean;
         children?: { name: string; kind: string; note_id?: string; children?: { name: string; kind: string }[] }[];
       }[];
-    };
-    expect(sy.children[0]?.name).toBe("生活");
-    expect(sy.children[0]?.path).toContain("20241211071716-w11cbza");
-    const parent = sy.children[0]?.children?.[0];
+    }[];
+    expect(groups.map((g) => g.source)).toEqual(["feishu", "siyuan", "obsidian"]);
+    const fs = groups.find((g) => g.source === "feishu");
+    expect(fs?.tree).toEqual([]);
+    const sy = groups.find((g) => g.source === "siyuan");
+    expect(sy?.name).toBe("我的思源");
+    expect(sy?.tree[0]?.name).toBe("生活");
+    expect(sy?.tree[0]?.path).toContain("20241211071716-w11cbza");
+    expect(sy?.tree[0]?.has_children).toBe(true);
+    expect(sy?.tree[0]?.children).toBeUndefined();
+    const expanded = await get(
+      `/v1/spaces/${spaceId}/tree?connection_id=${sy?.connection_id}&parent=${encodeURIComponent(sy?.tree[0]?.path ?? "")}`,
+      token,
+    );
+    expect(expanded.status).toBe(200);
+    const kids = expanded.body.tree as {
+      name: string;
+      kind: string;
+      has_children?: boolean;
+      children?: { name: string; kind: string }[];
+    }[];
+    const parent = kids[0];
     expect(parent?.name).toBe("父文档");
     expect(parent?.kind).toBe("note");
-    expect(parent?.children?.some((c) => c.name === "子文档" && c.kind === "note")).toBe(true);
-    const ob = roots.find((n) => n.name === "Obsidian") as {
-      children: { name: string; children?: { name: string }[] }[];
-    };
-    expect(ob.children[0]?.name).toBe("Daily");
-    expect(ob.children[0]?.children?.[0]?.name).toBe("日记");
+    expect(parent?.has_children).toBe(true);
+    const nested = await get(
+      `/v1/spaces/${spaceId}/tree?connection_id=${sy?.connection_id}&parent=${encodeURIComponent("20241211071716-w11cbza/20241211214233-uokc9hs.sy")}`,
+      token,
+    );
+    expect(nested.body.tree.some((c: { name: string; kind: string }) => c.name === "子文档" && c.kind === "note")).toBe(true);
+    const ob = groups.find((g) => g.source === "obsidian");
+    expect(ob?.tree[0]?.name).toBe("Daily");
+    expect(ob?.tree[0]?.has_children).toBe(true);
+    const roots = r.body.tree as { name: string }[];
+    expect(roots.map((n) => n.name)).toEqual(["飞书", "思源", "Obsidian"]);
   });
 
   it("GET /activity uses source_updated_at instead of ingest time", async () => {

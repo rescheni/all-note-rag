@@ -79,7 +79,7 @@ components:
 
 ## Overview
 
-窗边热茶翻笔记。暖日光从左侧进来，底是米纸，栏是亚麻，字是墨，动作只用一枚苔藓绿。中枢仍是只读聚合层：树、路径、同步「文件 / 数据块」不变。过渡要短：路由淡入、导航苔藓底、树开合高度+透明度、卡片轻抬。禁止电青、发丝网格、辉光按钮。尊重 `prefers-reduced-motion`。
+窗边热茶翻笔记。暖日光从左侧进来，底是米纸，栏是亚麻，字是墨，动作只用一枚苔藓绿。中枢仍是只读聚合层：树、路径、同步「文件 / 数据块」不变。过渡要短：路由 clip 收束、导航弹簧缝线、树开合、主按钮抹茶纸面眩光。禁止电青、发丝网格、霓虹辉光。尊重 `prefers-reduced-motion`。
 
 ## Colors
 
@@ -100,6 +100,19 @@ components:
 
 选择、插入符、滚动条都从这套色来。
 
+
+## Themes
+
+三套连贯配色，经设置页切换，写在 `hub_settings`（`theme:<user_id>`），`data-theme` 挂在 `<html>`。
+
+| id | 名 | 用途 |
+|---|---|---|
+| matcha（默认，无 attribute） | 抹茶纸色 | 暖日宣纸，本色 |
+| ink | 墨夜 | 暖墨深色阅读 |
+| plain | 素白 | 更安静的浅色 |
+
+禁止霓虹皮肤。默认必须保持抹茶纸色优秀。
+
 ## Typography
 
 - 品牌、h1/h2：`Noto Serif SC`，600。
@@ -119,16 +132,18 @@ components:
 
 ## Motion
 
-CSS only，无 3D 库。短、轻，无辉光。
+短、有物理、无霓虹。CSS 为主；Motion 只用于导航弹簧、源胶囊共享布局、主按钮抹茶眩光。每页一个作者时刻，不要每块相同 fade。
 
-- 路由：opacity + translateY
-- 导航当前项：苔藓浅底，左侧缝线滑动
-- 树：`grid-template-rows` + opacity
-- 卡片：hover translateY(-2px) + 暖阴影
-- 热力图：格子 stagger opacity
+- 路由：clip-path + 轻模糊，从已可见状态收束（不是 300ms 整页淡入）
+- 导航：苔藓浅底；左侧缝线弹簧跟随 hover / active；链接轻微磁吸
+- 树：开合高度 + 透明度；当前行左侧苔藓缝
+- 卡片 / 行 / 胶囊：hover 轻抬、press scale、墨/苔藓色 morph
+- 主 CTA：抹茶纸面眩光（保存并同步、登录）；飞书扫码纸面 clip 收束
+- 列表：20–40ms stagger（总延迟封顶）
+- 热力图：格子 stagger；悬停轻微放大
 - 进度条：width 400ms
 
-`prefers-reduced-motion: reduce` 时关掉位移和交错动画，保留颜色变化。
+`prefers-reduced-motion: reduce` 时关掉位移、交错、眩光追踪，保留颜色变化。
 
 ## Elevation & Depth
 

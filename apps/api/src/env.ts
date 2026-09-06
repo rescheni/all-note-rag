@@ -34,3 +34,20 @@ export const notionOAuthEnv = {
     return Boolean(this.clientId && this.clientSecret);
   },
 };
+
+const DEFAULT_FEISHU_REDIRECT = "http://127.0.0.1:3000/v1/connections/oauth/feishu/callback";
+
+export const feishuOAuthEnv = {
+  get appId() {
+    return process.env.FEISHU_APP_ID ?? "";
+  },
+  get appSecret() {
+    return process.env.FEISHU_APP_SECRET ?? "";
+  },
+  get redirectUri() {
+    return process.env.FEISHU_REDIRECT_URI || DEFAULT_FEISHU_REDIRECT;
+  },
+  get configured() {
+    return Boolean(this.appId && this.appSecret);
+  },
+};

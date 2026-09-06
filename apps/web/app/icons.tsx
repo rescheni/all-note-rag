@@ -33,7 +33,8 @@ function Stroke({ d }: { d: string }) {
 export function IconChevron({ open = false }: { open?: boolean }) {
   return (
     <Svg className={open ? "twist open" : "twist"}>
-      <Stroke d="M6 3.5 L11 8 L6 12.5" />
+      {/* Path mass centered on (8,8) so rotate(90deg) stays optically square in the 28px row */}
+      <Stroke d="M5.5 3.5 L10.5 8 L5.5 12.5" />
     </Svg>
   );
 }
@@ -45,6 +46,14 @@ export function IconNote() {
       <Stroke d="M10 2.5 V5.5 H13" />
       <Stroke d="M6.5 8.5 h3" />
       <Stroke d="M6.5 11 h3" />
+    </Svg>
+  );
+}
+
+export function IconFolder() {
+  return (
+    <Svg>
+      <Stroke d="M2.5 4.5 H6 l1.2 1.5 H13.5 V12.5 H2.5 Z" />
     </Svg>
   );
 }
@@ -163,6 +172,16 @@ export function IconMembers() {
   );
 }
 
+export function IconAccount() {
+  return (
+    <Svg>
+      <Stroke d="M8 7 a2.2 2.2 0 1 0 0-4.4 a2.2 2.2 0 0 0 0 4.4 Z" />
+      <Stroke d="M3.2 13.5 C3.2 10.8 5.2 9.2 8 9.2 C10.8 9.2 12.8 10.8 12.8 13.5" />
+      <Stroke d="M11.5 11.2 L13.2 12.9" />
+    </Svg>
+  );
+}
+
 export function IconLogout() {
   return (
     <Svg>
@@ -188,6 +207,25 @@ export function IconAi() {
   return (
     <Svg>
       <Stroke d="M8 2.5 L9.2 6.2 L13 6.5 L10.2 9 L11 12.8 L8 10.8 L5 12.8 L5.8 9 L3 6.5 L6.8 6.2 Z" />
+    </Svg>
+  );
+}
+
+export function IconMenu() {
+  return (
+    <Svg>
+      <Stroke d="M2.5 4.5 H13.5" />
+      <Stroke d="M2.5 8 H13.5" />
+      <Stroke d="M2.5 11.5 H13.5" />
+    </Svg>
+  );
+}
+
+export function IconClose() {
+  return (
+    <Svg>
+      <Stroke d="M4 4 L12 12" />
+      <Stroke d="M12 4 L4 12" />
     </Svg>
   );
 }

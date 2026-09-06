@@ -31,4 +31,13 @@ describe("oauth state CSRF", () => {
     const expired = signOAuthState({ uid: "u", sid: "s" }, SECRET, -30);
     expect(verifyOAuthState(expired.state, SECRET)).toBeNull();
   });
+
+  it("roundtrips origin in signed state", () => {
+    const { state } = signOAuthState(
+      { uid: "user-1", sid: "space-1", origin: "https://notes.rei0.cn" },
+      SECRET,
+    );
+    const payload = verifyOAuthState(state, SECRET);
+    expect(payload?.origin).toBe("https://notes.rei0.cn");
+  });
 });

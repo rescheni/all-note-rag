@@ -158,6 +158,8 @@ function inlineText(n: SyNode, links: NormalizedLink[], keepBlockRefs: boolean):
   if (t === "HTMLBlock" || t === "HTML" || t === "InlineHTML" || t === "InlineHtml") {
     const md = htmlImgsToMarkdown(dataOf(n));
     if (md) return md;
+    const raw = dataOf(n).trim();
+    if (raw) return raw;
   }
   if (t === "SoftBreak" || t === "Br") return "\n";
   return childrenOf(n).map((c) => inlineText(c, links, keepBlockRefs)).join("");
@@ -352,13 +354,13 @@ function renderBlock(
 
   if (t === "HTMLBlock" || t === "HTML") {
     const html = dataOf(n) || kids.map((c) => dataOf(c)).join("");
-    const md = htmlImgsToMarkdown(html);
+    const md = htmlImgsToMarkdown(html) || html.trim();
     if (md) {
       const id = nodeId(n) || `html-${blocks.length}`;
       blocks.push({
         source_block_id: id,
         type: "para",
-        text: md.replace(/\s+/g, " ").trim(),
+        text: md.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
         markdown: md,
         order_key: orderKey(blocks.length),
         depth,

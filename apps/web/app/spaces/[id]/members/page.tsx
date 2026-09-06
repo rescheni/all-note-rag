@@ -42,7 +42,7 @@ export default function SpaceMembersPage() {
         </p>
       )}
       {err && <p className="err">{err}</p>}
-      {space && <MembersPanel spaceId={space.id} role={role} />}
+      {space && <MembersPanel spaceId={space.id} role={role} spaceKind={space.kind} />}
     </>
   );
 }

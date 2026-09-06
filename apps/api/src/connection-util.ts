@@ -2,8 +2,9 @@ import { decryptSecret, encryptSecret, type ConnectionSecrets } from "@note-hub/
 import { query } from "./db.ts";
 import { env } from "./env.ts";
 
+/** Drop cursor (multi-MB sync maps) + redact secrets_ref for all HTTP responses. */
 export function publicConnection(row: Record<string, unknown>) {
-  const { secrets_ref: _sr, ...rest } = row;
+  const { secrets_ref: _sr, cursor: _cursor, ...rest } = row;
   return { ...rest, secrets_ref: _sr ? "configured" : null };
 }
 
@@ -13,6 +14,7 @@ export type ConnectionSecretFlags = {
   secret_key: boolean;
   token: boolean;
   access_token: boolean;
+  user_access_token: boolean;
   refresh_token: boolean;
   repo_password: boolean;
   app_id: boolean;
@@ -24,6 +26,7 @@ const SECRET_FLAG_KEYS = [
   "secret_key",
   "token",
   "access_token",
+  "user_access_token",
   "refresh_token",
   "repo_password",
   "app_id",
@@ -40,6 +43,7 @@ export async function connectionSecretFlags(conn: {
     secret_key: false,
     token: false,
     access_token: false,
+    user_access_token: false,
     refresh_token: false,
     repo_password: false,
     app_id: false,

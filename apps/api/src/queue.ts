@@ -125,3 +125,42 @@ export async function enqueueSyncFiles(
   await syncFileQueue.add("sync-file", { connectionId, keys: all }, { jobId, delay: debounceMs > 0 ? debounceMs : undefined });
   return { queued: true, jobId, keys: all };
 }
+
+/**
+ * Best-effort stop of queued sync work for a connection, used right before the row is deleted.
+ * Waiting/delayed jobs are removed; a job already active in a worker cannot be interrupted, so it
+ * is reported back — the worker aborts on its own once the connection row is gone.
+ */
+export async function cancelConnectionJobs(
+  connectionId: string,
+): Promise<{ removed: string[]; active: string[] }> {
+  const removed: string[] = [];
+  const active: string[] = [];
+  const fileJobId = syncFileJobId(connectionId);
+  const targets: { queue: Queue; jobId: string }[] = [
+    { queue: syncTickQueue, jobId: `sync-${connectionId}` },
+    { queue: syncFileQueue, jobId: fileJobId },
+    { queue: syncFileQueue, jobId: `${fileJobId}-next` },
+  ];
+  for (const t of targets) {
+    try {
+      const job = await t.queue.getJob(t.jobId);
+      if (!job) continue;
+      try {
+        await job.remove();
+        removed.push(t.jobId);
+      } catch {
+        // Locked by a live worker: leave it, the run aborts when it sees the row is gone.
+        active.push(t.jobId);
+      }
+    } catch {
+      /* redis hiccup must not block deletion */
+    }
+  }
+  try {
+    await redis.del(pendingRedisKey(connectionId));
+  } catch {
+    /* ignore */
+  }
+  return { removed, active };
+}

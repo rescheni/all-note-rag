@@ -1,5 +1,6 @@
 import {
   loadAiSettings,
+  refreshNoteLinks,
   collectAssetRefs,
   decryptSecret,
   encryptSecret,
@@ -553,6 +554,7 @@ async function processNote(
     await query("UPDATE notes SET source_updated_at = $2 WHERE id = $1", [row.id, sourceUpdatedAt.toISOString()]);
     await embedNullChunks({ noteId: row.id });
     await backfillAssetExtracts(row.id, conn.space_id, note.title);
+    await refreshNoteLinks(query, { id: row.id, spaceId: conn.space_id, connectionId: conn.id, source: conn.source, sourceId: note.source_id, path: note.path, markdown: note.markdown });
     const existingChunks = await query<{ n: string }>("SELECT count(*)::text AS n FROM chunks WHERE note_id = $1", [row.id]);
     return { status: "skip", chunkCount: Number(existingChunks.rows[0]?.n ?? 0) };
   }
@@ -617,9 +619,29 @@ async function processNote(
   const blockIds = await upsertBlocks(noteId, note);
   const chunkCount = await writeChunks(noteId, conn.space_id, note, blockIds);
   await resolveLinks(conn.id, noteId, note);
+  const linkRows = await refreshNoteLinks(query, { id: noteId, spaceId: conn.space_id, connectionId: conn.id, source: conn.source, sourceId: note.source_id, path: note.path, markdown: note.markdown });
+  const backlinkRows = await query<{ note_id: string; title: string; path: string }>(
+    `SELECT DISTINCT ON (n.id) n.id AS note_id, n.title, n.path
+     FROM note_links l
+     INNER JOIN notes n ON n.id = l.source_note_id AND n.deleted_at IS NULL
+     WHERE l.target_note_id = $1
+     ORDER BY n.id, n.title`,
+    [noteId],
+  );
 
   const html = renderPreviewHtml(note, {
     assetBase: `/v1/notes/${noteId}/assets?path=`,
+    links: linkRows.map((row) => ({
+      raw: row.raw,
+      label: row.label,
+      targetNoteId: row.targetNoteId,
+      heading: row.heading,
+    })),
+    backlinks: backlinkRows.rows.map((row) => ({
+      noteId: row.note_id,
+      title: row.title,
+      path: row.path,
+    })),
   });
   await putHub(`preview/${conn.space_id}/${noteId}/${note.hash}.html`, html, "text/html; charset=utf-8");
   return {
@@ -738,10 +760,45 @@ function createProgressWriter(runId: string, tallies: Tallies) {
   };
 }
 
+/** True once the connection row is gone (deleted mid-flight). */
+async function connectionGone(connectionId: string): Promise<boolean> {
+  const r = await query("SELECT 1 FROM connections WHERE id = $1", [connectionId]);
+  return (r.rowCount ?? 0) === 0;
+}
+
+/** Throttled "was this connection deleted?" probe, so a long run can bail out cheaply. */
+function createGoneWatch(connectionId: string, everyMs = 2000): () => Promise<boolean> {
+  let checkedAt = 0;
+  let gone = false;
+  return async () => {
+    if (gone) return true;
+    const now = Date.now();
+    if (now - checkedAt < everyMs) return false;
+    checkedAt = now;
+    gone = await connectionGone(connectionId);
+    return gone;
+  };
+}
+
+function logAborted(connectionId: string, where: string): void {
+  console.log(
+    JSON.stringify({
+      level: "info",
+      message: "connection deleted; sync aborted",
+      connection_id: connectionId,
+      where,
+    }),
+  );
+}
+
 export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Promise<void> {
   const r = await query("SELECT * FROM connections WHERE id = $1", [connectionId]);
   const conn = r.rows[0] as ConnectionRecord | undefined;
-  if (!conn) throw new Error("connection not found");
+  // Deleted while the job sat in the queue: nothing to sync, and failing the job would be noise.
+  if (!conn) {
+    logAborted(connectionId, "queued");
+    return;
+  }
 
   const earlier = await query<{ id: string }>(
     `SELECT id FROM sync_run
@@ -773,11 +830,17 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
   const progress: SyncProgress = { filesTotal: 0, filesDone: 0, chunksTotal: 0, chunksDone: 0 };
   const writer = createProgressWriter(runId, tallies);
 
+  const goneWatch = createGoneWatch(connectionId);
+
   const log = async (sourceId: string | null, noteId: string | null, level: string, message: string) => {
-    await query(
-      `INSERT INTO sync_note_log (connection_id, source_id, note_id, level, message) VALUES ($1,$2,$3,$4,$5)`,
-      [connectionId, sourceId, noteId, level, message],
-    );
+    try {
+      await query(
+        `INSERT INTO sync_note_log (connection_id, source_id, note_id, level, message) VALUES ($1,$2,$3,$4,$5)`,
+        [connectionId, sourceId, noteId, level, message],
+      );
+    } catch {
+      /* connection may have been deleted mid-run; a log row is not worth failing the job */
+    }
   };
 
   try {
@@ -822,7 +885,11 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
     const fileKeys = (opts.keys ?? []).map(decodeObjectKey).filter(Boolean);
     if (fileKeys.length) {
       const upsertedNotes: UpsertedNote[] = [];
-      await ingestFileKeys(conn, adapter, ctx, fileKeys, log, tallies, upsertedNotes, progress, writer);
+      await ingestFileKeys(conn, adapter, ctx, fileKeys, log, tallies, upsertedNotes, progress, writer, goneWatch);
+      if (await connectionGone(connectionId)) {
+        logAborted(connectionId, "file-sync");
+        return;
+      }
       await query(
         "UPDATE connections SET last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now() WHERE id = $1",
         [connectionId],
@@ -894,6 +961,8 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
     const upsertedNotes: UpsertedNote[] = [];
     const lock = createMutex();
     await mapPool(upsertsList, UPSERT_CONCURRENCY, async (ch) => {
+      // Deleted mid-sync: stop touching rows that no longer have a parent connection.
+      if (await goneWatch()) return;
       try {
         const result = await processNote(conn, adapter, ctx, ch.source_id, ch.path ?? ch.source_id);
         await lock.run(async () => {
@@ -924,10 +993,32 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
       }
     });
 
-    await query(
-      "UPDATE connections SET last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now() WHERE id = $1",
-      [connectionId],
-    );
+    if (await connectionGone(connectionId)) {
+      logAborted(connectionId, "full-sync");
+      return;
+    }
+    // Notion (and similar) watermarks live in nextCursor.last_edited_time.
+    // persistCursorMeta only keeps Siyuan/box meta keys, so we must write the
+    // watermark here — and only when nothing failed, otherwise a partial run
+    // would skip unprocessed pages forever on the next incremental sync.
+    const watermarkPatch: Record<string, unknown> = {};
+    if (tallies.failed === 0 && typeof cursor.last_edited_time === "string" && cursor.last_edited_time) {
+      watermarkPatch.last_edited_time = cursor.last_edited_time;
+    }
+    if (Object.keys(watermarkPatch).length) {
+      await query(
+        `UPDATE connections SET
+           cursor = COALESCE(cursor, '{}'::jsonb) || $2::jsonb,
+           last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now()
+         WHERE id = $1`,
+        [connectionId, JSON.stringify(watermarkPatch)],
+      );
+    } else {
+      await query(
+        "UPDATE connections SET last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now() WHERE id = $1",
+        [connectionId],
+      );
+    }
     await writer.finish(progress, cursor);
     console.log(
       JSON.stringify({
@@ -964,6 +1055,10 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
       }
     }
   } catch (e) {
+    if (await connectionGone(connectionId)) {
+      logAborted(connectionId, "error-path");
+      return;
+    }
     const message = e instanceof Error ? e.message : String(e);
     const last = isHubError(e) ? `${e.code}: ${e.message}` : message;
     await writer.finish(progress);
@@ -1052,6 +1147,7 @@ async function ingestFileKeys(
   upsertedNotes: UpsertedNote[],
   progress: SyncProgress,
   writer: ProgressWriter,
+  goneWatch?: () => Promise<boolean>,
 ): Promise<void> {
   progress.filesTotal = keys.length;
   progress.chunksTotal = 0;
@@ -1059,6 +1155,7 @@ async function ingestFileKeys(
   const cursor = (baseCtx.cursor ?? conn.cursor) as Record<string, unknown> | null;
 
   for (const key of keys) {
+    if (goneWatch && (await goneWatch())) break;
     const mapped = mapConnectionObjectKey(conn, key);
     if (!mapped || mapped.kind === "skip") {
       tallies.skipped++;

@@ -7,6 +7,8 @@ export type AskCitation = {
   title: string;
   quote: string;
   preview_url: string;
+  path: string;
+  connection_id: string;
 };
 
 export type AskResponse = {
@@ -36,6 +38,8 @@ export function citationsFromHits(hits: RetrieveHit[]): AskCitation[] {
       title: h.title,
       quote: h.quote,
       preview_url: h.preview_url,
+      path: h.path || "",
+      connection_id: h.connection_id || "",
     });
   }
   return out;

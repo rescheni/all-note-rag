@@ -2,9 +2,11 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, getToken } from "@/lib/api";
+import { api, friendlyErrorMessage, getToken } from "@/lib/api";
+import { FeishuQr } from "./feishu-qr";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
 import { SyncRunStatus, type SyncRunProgress } from "../sync-progress";
+import { SignatureButton, SourcePills } from "../ui-motion";
 
 export const SOURCES = [
   { id: "obsidian", label: "Obsidian" },
@@ -35,6 +37,7 @@ export type ConnectionConfig = {
   notebook_ids?: string[] | string;
   workspace_id?: string;
   wiki_space_id?: string;
+  wiki_node_token?: string;
   mode?: string;
   e2ee?: boolean;
   official_s3?: boolean;
@@ -59,6 +62,7 @@ export type SecretFlags = {
   secret_key?: boolean;
   token?: boolean;
   access_token?: boolean;
+  user_access_token?: boolean;
   refresh_token?: boolean;
   repo_password?: boolean;
   app_id?: boolean;
@@ -107,6 +111,7 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
   const [busy, setBusy] = useState(false);
   const [oauthBusy, setOauthBusy] = useState(false);
   const [oauthReady, setOauthReady] = useState<boolean | null>(null);
+  const [showFeishuEmbed, setShowFeishuEmbed] = useState(false);
   const [contactsBusy, setContactsBusy] = useState(false);
   const [contactsSync, setContactsSync] = useState<ContactsSyncSnapshot | null>(
     connection?.config?.contacts_sync ?? null,
@@ -128,8 +133,21 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
       }
       const q = new URLSearchParams(window.location.search);
       const oauthErr = q.get("oauth_error");
-      if (oauthErr) setErr(oauthErr);
-      if (q.get("oauth") === "ok") setMsg("已通过 Notion 授权。");
+      if (oauthErr) {
+        const raw = oauthErr;
+        const mapped =
+          /20029|invalid redirect|redirect.?url|回调地址/i.test(raw)
+            ? "飞书回调地址未登记。请在开放平台「安全设置」加入当前站点的回调地址。"
+            : friendlyErrorMessage(raw, "飞书授权未完成，请重新扫码。");
+        setErr(mapped);
+        q.delete("oauth_error");
+        const next = `${window.location.pathname}${q.toString() ? `?${q}` : ""}`;
+        window.history.replaceState({}, "", next);
+      }
+      if (q.get("oauth") === "ok") {
+        const src = connection?.source || sourceProp;
+        setMsg(src === "feishu" ? "已通过飞书扫码登录。" : "已通过 Notion 授权。");
+      }
     } catch {
       /* ignore */
     }
@@ -146,8 +164,9 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
   }, []);
 
   useEffect(() => {
-    if (source !== "notion") return;
-    api<{ configured: boolean }>("/v1/connections/oauth/notion/status")
+    if (source !== "notion" && source !== "feishu") return;
+    const path = source === "feishu" ? "/v1/connections/oauth/feishu/status" : "/v1/connections/oauth/notion/status";
+    api<{ configured: boolean }>(path)
       .then((r) => setOauthReady(r.configured))
       .catch(() => setOauthReady(false));
   }, [source]);
@@ -254,10 +273,17 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
         secrets: pickTypedSecrets(fd, ["token"]),
       };
     } else if (source === "feishu") {
+      let wikiSpace = str(fd, "wiki_space_id");
+      let wikiNode = str(fd, "wiki_node_token");
+      // Prefer a single primary URL field; never persist a node token as wiki_space_id.
+      if (wikiSpace && !/^[0-9]+$/.test(wikiSpace)) {
+        if (!wikiNode) wikiNode = wikiSpace;
+        wikiSpace = "";
+      }
       body = {
         source,
         name: str(fd, "name"),
-        config: { wiki_space_id: str(fd, "wiki_space_id") },
+        config: { wiki_space_id: wikiSpace, wiki_node_token: wikiNode },
         secrets: pickTypedSecrets(fd, ["app_id", "app_secret"]),
       };
     }
@@ -328,13 +354,7 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
       )}
       {space && space.role === "viewer" && <p className="err">只读成员不能保存连接。</p>}
       {variant === "create" && !editing && (
-        <div className="source-picker">
-          {SOURCES.map((s) => (
-            <Link key={s.id} href={`/connections/new?source=${s.id}`} className={source === s.id ? "active" : ""}>
-              {s.label}
-            </Link>
-          ))}
-        </div>
+        <SourcePills items={SOURCES} active={source} />
       )}
       {editing && source && (
         <p className="muted">源：{SOURCES.find((s) => s.id === source)?.label ?? source}</p>
@@ -409,9 +429,9 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
             </div>
           </section>
           <div className="form-actions">
-            <button type="submit" disabled={busy || !canEdit}>
+            <SignatureButton type="submit" disabled={busy || !canEdit}>
               {busy ? "保存中…" : "保存并同步"}
-            </button>
+            </SignatureButton>
             <Link href="/" className="btn secondary">
               返回
             </Link>
@@ -536,9 +556,9 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
             </>
           )}
           <div className="form-actions">
-            <button type="submit" disabled={busy || !canEdit}>
+            <SignatureButton type="submit" disabled={busy || !canEdit}>
               {busy ? "保存中…" : "保存并同步"}
-            </button>
+            </SignatureButton>
             <Link href="/" className="btn secondary">
               返回
             </Link>
@@ -631,9 +651,9 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
             </details>
           </section>
           <div className="form-actions">
-            <button type="submit" disabled={busy || !canEdit}>
+            <SignatureButton type="submit" disabled={busy || !canEdit}>
               {busy ? "保存中…" : "保存并同步"}
-            </button>
+            </SignatureButton>
             <Link href="/" className="btn secondary">
               返回
             </Link>
@@ -643,44 +663,135 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
 
       {source === "feishu" && (
         <form onSubmit={onSubmit} key={`feishu-${connection?.id ?? "new"}`}>
-          <section className="form-section">
-            <h2>连接名称</h2>
+          <section className="form-section feishu-scan">
+            <h2>用飞书扫码登录</h2>
+            <p className="hint">将打开飞书官方扫码页，扫完自动回到中枢。</p>
+            {(secrets?.access_token || secrets?.user_access_token) && (
+              <p className="ok-msg">已通过飞书扫码登录。再扫一次可重新授权。</p>
+            )}
+            {oauthReady === false && (
+              <p className="hint">还没配好飞书应用。可先在「高级」里填 App ID / Secret。</p>
+            )}
+            {!canEdit ? (
+              <p className="muted">只读成员不能授权连接。</p>
+            ) : !space?.id ? (
+              <p className="muted">正在加载空间…</p>
+            ) : (
+              <div className="form-actions">
+                <SignatureButton
+                  type="button"
+                  disabled={oauthBusy || !canEdit || !space?.id}
+                  onClick={async (ev) => {
+                    setErr("");
+                    setMsg("");
+                    if (!space?.id) {
+                      setErr("请先选择空间");
+                      return;
+                    }
+                    if (space.role === "viewer") {
+                      setErr("只读成员不能授权连接");
+                      return;
+                    }
+                    const form = ev.currentTarget.form;
+                    const fd = form ? new FormData(form) : new FormData();
+                    const q = new URLSearchParams({
+                      space_id: space.id,
+                      name: str(fd, "name") || "我的飞书",
+                      origin: window.location.origin,
+                    });
+                    const id = savedId || connection?.id;
+                    if (id) q.set("connection_id", id);
+                    setOauthBusy(true);
+                    try {
+                      const r = await api<{ url: string }>(`/v1/connections/oauth/feishu/authorize?${q.toString()}`);
+                      if (!r.url) {
+                        setErr("无法开始飞书授权");
+                        return;
+                      }
+                      window.location.href = r.url;
+                    } catch (er) {
+                      const ex = er as Error & { code?: string };
+                      setErr((ex.code ? `${ex.code}: ` : "") + (ex instanceof Error ? ex.message : "授权失败"));
+                    } finally {
+                      setOauthBusy(false);
+                    }
+                  }}
+                >
+                  {oauthBusy ? "跳转中…" : "用飞书扫码登录"}
+                </SignatureButton>
+              </div>
+            )}
             <div className="form-grid">
               <div className="field span-2">
                 <label>名称</label>
-                <input name="name" defaultValue={connection?.name ?? "我的飞书"} required />
+                <input name="name" type="text" defaultValue={connection?.name ?? "我的飞书"} required />
               </div>
             </div>
-          </section>
-          <section className="form-section">
-            <h2>凭证</h2>
+            {canEdit && space?.id ? (
+              <details
+                className="advanced"
+                onToggle={(e) => setShowFeishuEmbed((e.currentTarget as HTMLDetailsElement).open)}
+              >
+                <summary>本页嵌入二维码（可选）</summary>
+                <p className="hint">嵌入组件在部分应用上会报 4401，扫码请优先用上方官方页。</p>
+                {showFeishuEmbed ? (
+                  <FeishuQr
+                    spaceId={space.id}
+                    connectionId={savedId || connection?.id}
+                    name={connection?.name ?? "我的飞书"}
+                    onError={(m) => setErr(m)}
+                  />
+                ) : null}
+              </details>
+            ) : null}
             <div className="form-grid">
-              <div className="field">
-                <label>App ID</label>
-                <input
-                  name="app_id"
-                  required={!editing}
-                  defaultValue=""
-                  placeholder={secretPh(secrets?.app_id)}
-                  autoComplete="off"
-                />
-              </div>
-              <div className="field">
-                <label>App Secret</label>
-                <input
-                  name="app_secret"
-                  type="password"
-                  required={!editing}
-                  placeholder={secretPh(secrets?.app_secret)}
-                  autoComplete="off"
-                />
-              </div>
               <div className="field span-2">
-                <label>知识库 ID（可选）</label>
-                <input name="wiki_space_id" defaultValue={cfg.wiki_space_id ?? ""} />
+                <label>知识库链接（推荐）</label>
+                <input
+                  name="wiki_node_token"
+                  type="text"
+                  defaultValue={cfg.wiki_node_token ?? ""}
+                  placeholder="https://xxx.feishu.cn/wiki/..."
+                />
+                <p className="hint">
+                  粘贴飞书知识库或页面链接（feishu.cn/wiki/...）。同步时会自动解析真实的数字
+                  space_id，无需手填知识库 ID。
+                </p>
               </div>
             </div>
-            <p className="muted">同步知识库 docx。需要真实应用凭证；未填知识库 ID 时列表为空。测试使用 mock。</p>
+            <details className="advanced">
+              <summary>高级：应用凭证与数字知识库 ID</summary>
+              <p className="hint">
+                知识库同步请先「用飞书扫码登录」（需要用户授权）。仅填 App
+                ID/Secret 时应用必须是该知识库成员。下方「知识库 ID」仅填开放平台返回的纯数字
+                space_id；不要把 wiki 链接或节点 token 填到这里。开放平台请开通
+                wiki:wiki:readonly、wiki:node:retrieve、docx:document:readonly、drive:drive:readonly、offline_access。
+              </p>
+              <div className="form-grid">
+                <div className="field">
+                  <label>App ID</label>
+                  <input name="app_id" type="text" defaultValue="" placeholder={secretPh(secrets?.app_id)} autoComplete="off" />
+                </div>
+                <div className="field">
+                  <label>App Secret</label>
+                  <input
+                    name="app_secret"
+                    type="password"
+                    placeholder={secretPh(secrets?.app_secret)}
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="field span-2">
+                  <label>知识库 ID（可选，纯数字）</label>
+                  <input
+                    name="wiki_space_id"
+                    type="text"
+                    defaultValue={/^[0-9]+$/.test(String(cfg.wiki_space_id ?? "").trim()) ? cfg.wiki_space_id : ""}
+                    placeholder="例如 7385347710194008067"
+                  />
+                </div>
+              </div>
+            </details>
           </section>
           {editing && connId && (
             <section className="form-section">
@@ -726,7 +837,7 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
             </section>
           )}
           <div className="form-actions">
-            <button type="submit" disabled={busy || !canEdit}>
+            <button type="submit" className="secondary" disabled={busy || !canEdit}>
               {busy ? "保存中…" : "保存并同步"}
             </button>
             <Link href="/" className="btn secondary">

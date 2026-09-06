@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
+import { SafeMarkdown } from "@/lib/safe-markdown";
 
 type EventRow = {
   id: string;
@@ -84,7 +85,7 @@ export default function GrowthPage() {
           {report && (
             <div className="card">
               <h2>周报</h2>
-              <pre className="report">{report}</pre>
+              <div className="report-md"><SafeMarkdown source={report} /></div>
             </div>
           )}
           <div className="card">
