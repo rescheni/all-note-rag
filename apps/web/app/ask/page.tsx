@@ -1,10 +1,18 @@
 "use client";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useId, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
 import { SafeMarkdown } from "@/lib/safe-markdown";
 import { PathCrumbs, decodeSegment } from "../notes/crumbs";
+import { IconAsk } from "../icons";
+import {
+  SignatureButton,
+  easeOutExpo,
+  motion,
+  springSoft,
+  useReducedMotion,
+} from "../ui-motion";
 
 type Citation = {
   note_id: string;
@@ -32,12 +40,38 @@ function shelfHref(c: Citation): string | null {
   return `/notes?${q.toString()}`;
 }
 
+function citeHref(c: Citation): string {
+  return (
+    c.preview_url ||
+    `/notes/${c.note_id}${c.source_block_id ? `#b-${c.source_block_id}` : ""}`
+  );
+}
+
+const listVariants = {
+  hidden: {},
+  show: {
+    transition: { staggerChildren: 0.03, delayChildren: 0.05 },
+  },
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 8 },
+  show: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.28, ease: easeOutExpo },
+  },
+};
+
 export default function AskPage() {
+  const reduced = useReducedMotion();
+  const inputId = useId();
   const [space, setSpace] = useState<Space | null>(null);
   const [busy, setBusy] = useState(false);
   const [out, setOut] = useState<AskOut | null>(null);
   const [err, setErr] = useState("");
   const [aiReady, setAiReady] = useState(true);
+  const [asked, setAsked] = useState("");
 
   useEffect(() => {
     if (!getToken()) {
@@ -58,6 +92,7 @@ export default function AskPage() {
     const query = String(new FormData(e.currentTarget).get("query") ?? "").trim();
     setErr("");
     setBusy(true);
+    setAsked(query);
     try {
       const res = await api<AskOut>(`/v1/spaces/${space.id}/ask`, {
         method: "POST",
@@ -71,54 +106,164 @@ export default function AskPage() {
     }
   }
 
+  const showCites = out && !out.unknown && out.citations.length > 0;
+
   return (
-    <>
-      <h1>问答</h1>
-      <p className="readonly-banner">中枢只读。回答来自当前空间已同步的笔记，不会写回任何源。</p>
-      {space && <p className="muted">当前空间：{space.name}（{spaceKindLabel(space.kind)}）</p>}
-      {!aiReady && (
-        <p className="muted">
-          未配置 AI 端点，问答使用本地抽取。<Link href="/settings">去设置</Link>
+    <div className="hub-page ask-page">
+      <header className="hub-page-head">
+        <h1>问答</h1>
+        <p className="readonly-banner">
+          中枢只读。回答来自当前空间已同步的笔记，不会写回任何源。
         </p>
-      )}
-      <form className="search-bar" onSubmit={onSubmit}>
-        <input name="query" type="text" placeholder="问当前空间的笔记…" required />
-        <button type="submit" className="signature" disabled={busy || !space}>{busy ? "检索中…" : "提问"}</button>
+        {space ? (
+          <p className="hub-space-chip">
+            <span className="hub-space-dot" aria-hidden="true" />
+            {space.name}
+            <span className="muted"> · {spaceKindLabel(space.kind)}</span>
+          </p>
+        ) : null}
+        {!aiReady ? (
+          <p className="hub-hint-pill">
+            未配置 AI 端点，问答使用本地抽取。
+            <Link href="/settings">去设置</Link>
+          </p>
+        ) : null}
+      </header>
+
+      <form className="ask-prompt-shell" onSubmit={onSubmit}>
+        <label className="visually-hidden" htmlFor={inputId}>
+          提问
+        </label>
+        <span className="ask-prompt-icon" aria-hidden="true">
+          <IconAsk />
+        </span>
+        <input
+          id={inputId}
+          name="query"
+          type="text"
+          placeholder="问当前空间的笔记…"
+          required
+          disabled={busy || !space}
+          autoComplete="off"
+          enterKeyHint="send"
+        />
+        <SignatureButton type="submit" disabled={busy || !space}>
+          {busy ? "检索中…" : "提问"}
+        </SignatureButton>
       </form>
-      {err && <p className="err">{err}</p>}
-      {out && (
-        <>
-          <div className="ask-answer card">
-            <SafeMarkdown source={out.answer_markdown} />
+
+      {err ? (
+        <div className="hub-state hub-state-error" role="alert">
+          <strong>这次没答上来</strong>
+          <p>{err}</p>
+          <p className="muted">稍后再试，或先确认空间里已有同步笔记。</p>
+        </div>
+      ) : null}
+
+      {busy ? (
+        <div className="hub-state hub-state-loading" aria-busy="true" aria-live="polite">
+          <div className="hub-pulse" aria-hidden="true">
+            <span />
+            <span />
+            <span />
           </div>
-          {out.unknown || out.citations.length === 0 ? null : (
+          <p>正在从笔记里找证据…</p>
+        </div>
+      ) : null}
+
+      {!out && !busy && !err ? (
+        <div className="hub-state hub-state-idle">
+          <strong>带着问题来翻笔记</strong>
+          <p className="muted">回答会附上来源引用。先同步，再提问，痕迹可溯。</p>
+        </div>
+      ) : null}
+
+      {out && !busy ? (
+        <motion.section
+          className="ask-result"
+          initial={reduced ? false : { opacity: 0.92, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.26, ease: easeOutExpo }}
+          key={asked}
+        >
+          {asked ? (
+            <p className="ask-asked muted">
+              问 · <span>{asked}</span>
+            </p>
+          ) : null}
+
+          <article className="ask-answer-paper">
+            <SafeMarkdown source={out.answer_markdown} />
+          </article>
+
+          {showCites ? (
             <>
-              <h2>来源</h2>
-              <div className="cite-grid">
-                {out.citations.map((c) => {
+              <div className="cite-chip-row" aria-label="来源速览">
+                {out!.citations.map((c, i) => (
+                  <motion.div
+                    key={`chip-${c.note_id}-${c.source_block_id || c.block_id}-${i}`}
+                    whileHover={reduced ? undefined : { y: -1, scale: 1.02 }}
+                    whileTap={reduced ? undefined : { scale: 0.97 }}
+                    transition={springSoft}
+                  >
+                    <Link href={citeHref(c)} className="cite-chip">
+                      <span className="cite-chip-n" aria-hidden="true">
+                        {i + 1}
+                      </span>
+                      <span className="cite-chip-t">
+                        {decodeSegment(c.title) || "未命名"}
+                      </span>
+                    </Link>
+                  </motion.div>
+                ))}
+              </div>
+
+              <h2 className="ask-cites-h">来源</h2>
+              <motion.div
+                className="cite-stack"
+                variants={reduced ? undefined : listVariants}
+                initial={reduced ? false : "hidden"}
+                animate="show"
+              >
+                {out!.citations.map((c, i) => {
                   const shelf = shelfHref(c);
                   return (
-                    <div key={c.note_id + (c.source_block_id || c.block_id)} className="source-card">
-                      <Link
-                        href={c.preview_url || `/notes/${c.note_id}${c.source_block_id ? `#b-${c.source_block_id}` : ""}`}
-                      >
-                        <h3>{decodeSegment(c.title) || "未命名"}</h3>
+                    <motion.article
+                      key={c.note_id + (c.source_block_id || c.block_id)}
+                      className="cite-card"
+                      variants={reduced ? undefined : itemVariants}
+                      whileHover={reduced ? undefined : { y: -2 }}
+                      transition={springSoft}
+                    >
+                      <Link href={citeHref(c)} className="cite-card-main">
+                        <div className="cite-card-head">
+                          <span className="cite-chip-n" aria-hidden="true">
+                            {i + 1}
+                          </span>
+                          <h3>{decodeSegment(c.title) || "未命名"}</h3>
+                        </div>
+                        {c.path ? <PathCrumbs path={c.path} title={c.title} /> : null}
+                        {c.quote ? (
+                          <blockquote className="ask-quote">{c.quote}</blockquote>
+                        ) : null}
                       </Link>
-                      {c.path ? <PathCrumbs path={c.path} title={c.title} /> : null}
-                      {c.quote && <blockquote className="ask-quote">{c.quote}</blockquote>}
                       {shelf ? (
-                        <div className="muted">
-                          <Link href={shelf}>在书架中打开</Link>
+                        <div className="cite-card-foot">
+                          <Link href={shelf} className="hit-shelf">
+                            在书架中打开
+                          </Link>
                         </div>
                       ) : null}
-                    </div>
+                    </motion.article>
                   );
                 })}
-              </div>
+              </motion.div>
             </>
-          )}
-        </>
-      )}
-    </>
+          ) : out.unknown || out.citations.length === 0 ? (
+            <p className="hub-inline-empty muted">这次没有可点的来源卡片。</p>
+          ) : null}
+        </motion.section>
+      ) : null}
+    </div>
   );
 }
