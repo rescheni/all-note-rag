@@ -257,8 +257,10 @@ export function IconSync({
   const cls = [spinning ? "icon-spin" : "", className].filter(Boolean).join(" ");
   return (
     <Svg className={cls || undefined}>
-      <Stroke d="M13.2 8 A5.2 5.2 0 1 1 11.4 3.6" />
-      <Stroke d="M11.2 2.4 L13.5 3.7 L11.6 5.6" />
+      <Stroke d="M3.2 8a4.8 4.8 0 0 1 8-3.4" />
+      <Stroke d="M11.2 2.4 V5.2 H8.4" />
+      <Stroke d="M12.8 8a4.8 4.8 0 0 1-8 3.4" />
+      <Stroke d="M4.8 13.6 V10.8 H7.6" />
     </Svg>
   );
 }

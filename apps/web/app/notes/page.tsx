@@ -937,6 +937,7 @@ export default function NotesPage() {
                               {pathLine && srcLabel ? <span aria-hidden="true"> · </span> : null}
                               {srcLabel ? (
                                 <span className="notes-row-source" data-source={src}>
+                                  <IconSourceMark source={src || ""} className="notes-row-source-mark" />
                                   {srcLabel}
                                 </span>
                               ) : null}
@@ -998,6 +999,7 @@ export default function NotesPage() {
                               {pathLine && srcLabel ? <span aria-hidden="true"> · </span> : null}
                               {srcLabel ? (
                                 <span className="notes-row-source" data-source={src}>
+                                  <IconSourceMark source={src || ""} className="notes-row-source-mark" />
                                   {srcLabel}
                                 </span>
                               ) : null}

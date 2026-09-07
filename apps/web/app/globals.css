@@ -1173,14 +1173,23 @@ a.notes-row-link:hover {
 }
 .notes-row-source {
   --cover: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.22rem;
   flex-shrink: 0;
   font-size: 0.6875rem;
   letter-spacing: 0.02em;
-  padding: 0.08rem 0.38rem;
+  padding: 0.08rem 0.38rem 0.08rem 0.28rem;
   border-radius: 999px;
   color: var(--ink);
   background: color-mix(in srgb, var(--cover) 16%, transparent);
   border: 1px solid color-mix(in srgb, var(--cover) 28%, var(--line));
+}
+.notes-row-source-mark {
+  width: 11px;
+  height: 11px;
+  color: var(--cover);
+  flex-shrink: 0;
 }
 .notes-row-source[data-source="feishu"] { --cover: var(--book-feishu); }
 .notes-row-source[data-source="notion"] { --cover: var(--book-notion); }
@@ -2805,8 +2814,10 @@ button.heat-cell:hover { box-shadow: none; }
 }
 .reading-meta-sync .sync-glyph,
 .reading-sync-btn .sync-glyph {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.92;
 }
 .reading-sync-btn {
   display: inline-flex;
