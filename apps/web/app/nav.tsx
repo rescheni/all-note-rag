@@ -20,7 +20,7 @@ import {
   IconSkills,
   IconSpace,
   IconWriting,
-  IconAi,
+  IconSettings,
 } from "./icons";
 
 function itemActive(path: string, href: string) {
@@ -62,18 +62,22 @@ function NavLink({
   );
 }
 
+type MeUser = { id: string; email: string; display_name: string | null };
+
 export function Nav() {
   const path = usePathname() || "/";
   const [authed, setAuthed] = useState(false);
   const [spaceId, setSpaceId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [me, setMe] = useState<MeUser | null>(null);
   const navRef = useRef<HTMLElement>(null);
   const indRef = useRef<HTMLSpanElement>(null);
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
 
   useEffect(() => {
-    setAuthed(Boolean(getToken()));
+    const token = getToken();
+    setAuthed(Boolean(token));
     const sync = () => setSpaceId(getStoredSpaceId());
     sync();
     window.addEventListener(SPACE_CHANGE_EVENT, sync);
@@ -83,6 +87,24 @@ export function Nav() {
       window.removeEventListener("storage", sync);
     };
   }, []);
+
+  useEffect(() => {
+    if (!authed) {
+      setMe(null);
+      return;
+    }
+    let cancelled = false;
+    api<{ user: MeUser }>("/v1/me")
+      .then((r) => {
+        if (!cancelled) setMe(r.user);
+      })
+      .catch(() => {
+        if (!cancelled) setMe(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authed]);
 
   // Close drawer on route change.
   useEffect(() => {
@@ -132,7 +154,10 @@ export function Nav() {
       nav.removeEventListener("mouseover", onOver);
       nav.removeEventListener("mouseleave", onLeave);
     };
-  }, [path, authed, spaceId, place, menuOpen]);
+  }, [path, authed, spaceId, place, menuOpen, me]);
+
+  const userLabel = me?.display_name?.trim() || me?.email || "";
+  const userTitle = me?.email || userLabel || undefined;
 
   return (
     <>
@@ -168,8 +193,8 @@ export function Nav() {
               <NavLink href="/ask" icon={<IconAsk />} onNavigate={closeMenu}>
                 问答
               </NavLink>
-              <NavLink href="/settings" icon={<IconAi />} onNavigate={closeMenu}>
-                AI
+              <NavLink href="/settings" icon={<IconSettings />} onNavigate={closeMenu}>
+                设置
               </NavLink>
               <div className="nav-gap" />
               <NavLink href="/growth" icon={<IconGrowth />} onNavigate={closeMenu}>
@@ -196,19 +221,32 @@ export function Nav() {
               <NavLink href="/account" icon={<IconAccount />} onNavigate={closeMenu}>
                 账号
               </NavLink>
-              <button
-                type="button"
-                className="linkish nav-exit"
-                onClick={() => {
-                  closeMenu();
-                  void api("/v1/auth/logout", { method: "POST" }).catch(() => undefined);
-                  setToken(null);
-                  location.href = "/login";
-                }}
-              >
-                <IconLogout />
-                <span>退出</span>
-              </button>
+              <div className="nav-foot">
+                {userLabel ? (
+                  <Link
+                    href="/account"
+                    className="nav-user"
+                    title={userTitle}
+                    onClick={closeMenu}
+                  >
+                    <span className="nav-user-dot" aria-hidden="true" />
+                    <span className="nav-user-name">{userLabel}</span>
+                  </Link>
+                ) : null}
+                <button
+                  type="button"
+                  className="linkish nav-exit"
+                  onClick={() => {
+                    closeMenu();
+                    void api("/v1/auth/logout", { method: "POST" }).catch(() => undefined);
+                    setToken(null);
+                    location.href = "/login";
+                  }}
+                >
+                  <IconLogout />
+                  <span>退出</span>
+                </button>
+              </div>
             </>
           ) : (
             <>

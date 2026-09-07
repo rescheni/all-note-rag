@@ -211,6 +211,22 @@ export function IconAi() {
   );
 }
 
+export function IconSettings() {
+  return (
+    <Svg>
+      <circle cx="8" cy="8" r="2.1" stroke="currentColor" strokeWidth="1.5" />
+      <Stroke d="M8 2.4 V4.1" />
+      <Stroke d="M8 11.9 V13.6" />
+      <Stroke d="M2.4 8 H4.1" />
+      <Stroke d="M11.9 8 H13.6" />
+      <Stroke d="M3.9 3.9 L5.1 5.1" />
+      <Stroke d="M10.9 10.9 L12.1 12.1" />
+      <Stroke d="M12.1 3.9 L10.9 5.1" />
+      <Stroke d="M5.1 10.9 L3.9 12.1" />
+    </Svg>
+  );
+}
+
 export function IconMenu() {
   return (
     <Svg>

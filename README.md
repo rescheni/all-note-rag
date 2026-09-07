@@ -15,7 +15,7 @@
 - **热力图**：首页写作活动（字数 / 块 / 篇）
 - **账号**：注册登录、空间成员、个人空间 **子账号**、长效 **API Token**（`hub_…`）
 - **Agent 调用**：登录 JWT / `hub_` Token / HTTP Basic（邮箱+密码）
-- **AI 设置**：配置 OpenAI 兼容 Base URL / Key；「刷新模型列表」从上游拉取可选模型
+- **设置**（导航「设置」）：AI 端点、主题、氛围；配置 OpenAI 兼容 Base URL / Key，「刷新模型列表」从上游拉取可选模型
 - **文档 ACL**：笔记级可见性（空间全员 / 仅所有者 / 指定成员）
 - **OCR / Docker**：Worker 镜像含 tesseract（chi_sim + eng）、poppler、antiword；图片与 pdf/docx 可进检索
 

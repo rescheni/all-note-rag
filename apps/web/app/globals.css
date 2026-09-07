@@ -208,8 +208,10 @@ h1 + .readonly-banner { margin-top: 0.15rem; }
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
+  flex: 1;
+  min-height: 0;
+  position: relative;
 }
-.rail nav { position: relative; }
 .nav-indicator {
   /* Hover seam only — active route uses a::before so the two never fight */
   position: absolute;
@@ -337,6 +339,62 @@ h1 + .readonly-banner { margin-top: 0.15rem; }
 }
 .rail .nav-gap {
   height: 0.7rem;
+}
+
+/* Bottom of rail: current user chip + logout */
+.rail .nav-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--line);
+}
+.rail .nav-user {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--ink);
+  text-decoration: none;
+  padding: 0.35rem 0.65rem;
+  margin: 0;
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+  line-height: 1.25;
+  width: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: 0;
+  min-width: 0;
+  transition: color 180ms var(--ease), background 180ms var(--ease);
+}
+.rail .nav-user:hover {
+  color: var(--ink);
+  background: var(--paper);
+  text-decoration: none;
+}
+.rail .nav-user:focus {
+  outline: none;
+}
+.rail .nav-user:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.nav-user-dot {
+  flex-shrink: 0;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--moss-wash);
+}
+.nav-user-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 /* Mobile drawer chrome — hidden on desktop; top row collapses to contents */
@@ -1827,6 +1885,14 @@ button.heat-cell:hover { box-shadow: none; }
     padding: 0.55rem 0.65rem;
     width: 100%;
     font-size: 0.9375rem;
+  }
+  .rail .nav-user {
+    min-height: 40px;
+    padding: 0.45rem 0.65rem;
+    font-size: 0.875rem;
+  }
+  .rail .nav-foot {
+    padding-top: 0.65rem;
   }
   .nav-indicator { display: none; }
   .rail .nav-gap { height: 0.55rem; }
@@ -3454,6 +3520,12 @@ html[data-theme="ink"] .rail {
 html[data-theme="ink"] .rail nav a,
 html[data-theme="ink"] .rail nav button.linkish.nav-exit {
   color: var(--ink);
+}
+html[data-theme="ink"] .rail .nav-user {
+  color: var(--ink);
+}
+html[data-theme="ink"] .rail .nav-foot {
+  border-top-color: var(--line);
 }
 html[data-theme="ink"] .rail nav a.active {
   background: var(--moss-wash);
