@@ -21,6 +21,7 @@ import {
 } from "../crumbs";
 import { easeOutExpo, motion, useReducedMotion } from "../../ui-motion";
 import { readCachedTheme, subscribeTheme } from "../../theme/store";
+import { IconSourceMark } from "../../icons";
 import type { HubTheme } from "../../theme/themes";
 
 type SimilarHit = {
@@ -33,47 +34,9 @@ type SimilarHit = {
 };
 
 function SourceBadge({ source }: { source: string }) {
-  const common = {
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.5,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-    "aria-hidden": true,
-  };
-  let mark = (
-    <svg className="note-source-mark" {...common}>
-      <path d="M5.5 5h9L18.5 9v10h-13Z" />
-      <path d="M14.5 5v4h4" />
-    </svg>
-  );
-  if (source === "obsidian") {
-    mark = (
-      <svg className="note-source-mark" {...common}>
-        <path d="M13 3 19.5 9.5 16 21 8 19 4.5 10.5Z" />
-        <path d="M13 3 10 12l6 9M4.5 10.5 10 12" />
-      </svg>
-    );
-  } else if (source === "siyuan") {
-    mark = (
-      <svg className="note-source-mark" {...common}>
-        <path d="M12 3.5c2.6 2.7 4 4.9 4 6.7a4 4 0 0 1-8 0c0-1.8 1.4-4 4-6.7Z" />
-        <path d="M6 17.5c2 1.2 4 1.2 6 0s4-1.2 6 0" />
-        <path d="M6 20.5c2 1.2 4 1.2 6 0s4-1.2 6 0" />
-      </svg>
-    );
-  } else if (source === "feishu") {
-    mark = (
-      <svg className="note-source-mark" {...common}>
-        <rect x="5" y="4.5" width="14" height="15" rx="2.5" />
-        <path d="M9 9.5h6M9 13h6M9 16.5h3.5" />
-      </svg>
-    );
-  }
   return (
     <span className="note-source-badge" data-source={source} title={bookSourceLabel(source)}>
-      {mark}
+      <IconSourceMark source={source} className="note-source-mark" />
       {bookSourceLabel(source)}
     </span>
   );

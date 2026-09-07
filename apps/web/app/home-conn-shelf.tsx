@@ -10,6 +10,7 @@ import {
   SyncRunStatus,
   type SyncRunProgress,
 } from "./sync-progress";
+import { IconSourceMark, IconSync } from "./icons";
 
 export type HomeConn = {
   id: string;
@@ -68,49 +69,6 @@ function statusLabel(status: string) {
   return status;
 }
 
-function SourceMark({ source }: { source: string }) {
-  const common = {
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.5,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-    "aria-hidden": true,
-  };
-  if (source === "obsidian") {
-    return (
-      <svg className="source-mark" {...common}>
-        <path d="M13 3 19.5 9.5 16 21 8 19 4.5 10.5Z" />
-        <path d="M13 3 10 12l6 9M4.5 10.5 10 12" />
-      </svg>
-    );
-  }
-  if (source === "siyuan") {
-    return (
-      <svg className="source-mark" {...common}>
-        <path d="M12 3.5c2.6 2.7 4 4.9 4 6.7a4 4 0 0 1-8 0c0-1.8 1.4-4 4-6.7Z" />
-        <path d="M6 17.5c2 1.2 4 1.2 6 0s4-1.2 6 0" />
-        <path d="M6 20.5c2 1.2 4 1.2 6 0s4-1.2 6 0" />
-      </svg>
-    );
-  }
-  if (source === "notion") {
-    return (
-      <svg className="source-mark" {...common}>
-        <path d="M5.5 5h9L18.5 9v10h-13Z" />
-        <path d="M14.5 5v4h4" />
-        <path d="M8.5 15.5V11l5 4.5V11" />
-      </svg>
-    );
-  }
-  return (
-    <svg className="source-mark" {...common}>
-      <path d="M4 12.5 20 4.5l-6 15-2.5-5.5Z" />
-      <path d="m11.5 14 4-6" />
-    </svg>
-  );
-}
 
 function orderConns(conns: HomeConn[]): { conn: HomeConn; volume: number }[] {
   const bySource = new Map<string, HomeConn[]>();
@@ -198,14 +156,19 @@ function ConnBook({
           <span className="book-cover">
             <span className="book-cover-face">
               <span className="book-cover-top">
-                <SourceMark source={conn.source} />
-                <span className="book-cover-source">{sourceLabel(conn.source)}</span>
+                <span className="book-cover-source-pill">
+                  <IconSourceMark source={conn.source} />
+                  <span className="book-cover-source">{sourceLabel(conn.source)}</span>
+                </span>
                 {volumeMark ? <span className="book-cover-volume">{volumeMark}</span> : null}
               </span>
               <span className="book-cover-title">{conn.name}</span>
               <span className="book-cover-foot">
                 <span className="book-cover-count">{label}</span>
-                <span className="book-cover-sync">{syncRelative(conn.last_sync_at)}</span>
+                <span className="book-cover-sync">
+                  <IconSync className="sync-glyph" />
+                  {syncRelative(conn.last_sync_at)}
+                </span>
               </span>
             </span>
             <span className="book-cover-inside">
@@ -225,14 +188,18 @@ function ConnBook({
             onClick={canSync ? syncClick : openBook}
             title={canSync ? "点击同步" : undefined}
           >
-            {statusLabel(conn.status)}
-            {conn.last_sync_at ? ` · ${syncRelative(conn.last_sync_at)}` : null}
+            <IconSync spinning={syncing} className="sync-glyph" />
+            <span>
+              {statusLabel(conn.status)}
+              {conn.last_sync_at ? ` · ${syncRelative(conn.last_sync_at)}` : null}
+            </span>
           </button>
         )}
         {!syncing && <SyncRunStatus run={conn.latest_run} />}
         {conn.last_error && !syncing && <div className="err home-book-err">{conn.last_error}</div>}
         {canSync && (
           <button type="button" className="linkish home-book-sync-btn" onClick={syncClick}>
+            <IconSync className="sync-glyph" />
             同步
           </button>
         )}

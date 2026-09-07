@@ -3,7 +3,7 @@ name: 笔记中枢
 description: 窗边热茶翻笔记。暖日、宣纸、苔藓缝线；只读聚合层，不是仪表盘。
 colors:
   desk: "#f3eee4"
-  rail: "#ebe3d4"
+  rail: "#e2d6c3"
   paper: "#fffaf2"
   ink: "#3c332c"
   muted: "#8a7d70"
@@ -88,7 +88,8 @@ components:
 | Token | Hex | Use |
 |---|---|---|
 | desk | `#f3eee4` | 页面底。米纸，不是纯白 |
-| rail | `#ebe3d4` | 左栏、目录树底。亚麻 |
+| rail | `#e2d6c3` | 左导航栏（更深亚麻） |
+| tree | `#f6f1e7` | 目录树底，与左栏分列 |
 | paper | `#fffaf2` | 抬起的表面：表单、悬停行 |
 | ink | `#3c332c` | 正文、标题 |
 | muted | `#8a7d70` | 次要说明 |

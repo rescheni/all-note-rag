@@ -12,7 +12,7 @@ import {
 import Link from "next/link";
 import { api, apiOrigin, getToken } from "@/lib/api";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
-import { IconAsset, IconFolder, IconNote } from "../icons";
+import { IconAsset, IconFolder, IconNote, IconSourceMark, IconSync } from "../icons";
 import { useReducedMotion } from "../ui-motion";
 import {
   collectPathTitles,
@@ -113,50 +113,6 @@ type ConnectionMeta = {
 
 type BookMeta = { count: number; capped: boolean; lastSync: string | null; status: string };
 
-/** Drawn source marks, one stroke weight, no emoji. */
-function SourceMark({ source }: { source: string }) {
-  const common = {
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.5,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-    "aria-hidden": true,
-  };
-  if (source === "obsidian") {
-    return (
-      <svg className="source-mark" {...common}>
-        <path d="M13 3 19.5 9.5 16 21 8 19 4.5 10.5Z" />
-        <path d="M13 3 10 12l6 9M4.5 10.5 10 12" />
-      </svg>
-    );
-  }
-  if (source === "siyuan") {
-    return (
-      <svg className="source-mark" {...common}>
-        <path d="M12 3.5c2.6 2.7 4 4.9 4 6.7a4 4 0 0 1-8 0c0-1.8 1.4-4 4-6.7Z" />
-        <path d="M6 17.5c2 1.2 4 1.2 6 0s4-1.2 6 0" />
-        <path d="M6 20.5c2 1.2 4 1.2 6 0s4-1.2 6 0" />
-      </svg>
-    );
-  }
-  if (source === "notion") {
-    return (
-      <svg className="source-mark" {...common}>
-        <path d="M5.5 5h9L18.5 9v10h-13Z" />
-        <path d="M14.5 5v4h4" />
-        <path d="M8.5 15.5V11l5 4.5V11" />
-      </svg>
-    );
-  }
-  return (
-    <svg className="source-mark" {...common}>
-      <path d="M4 12.5 20 4.5l-6 15-2.5-5.5Z" />
-      <path d="m11.5 14 4-6" />
-    </svg>
-  );
-}
 
 /** Fatter spine for a fuller book; a source with no notes stays visibly thin. */
 function spineDepth(count: number | undefined): number {
@@ -252,14 +208,19 @@ const SourceBook = memo(function SourceBook({
           <span className="book-cover">
             <span className="book-cover-face">
               <span className="book-cover-top">
-                <SourceMark source={group.source} />
-                <span className="book-cover-source">{sourceLabel(group.source)}</span>
+                <span className="book-cover-source-pill">
+                  <IconSourceMark source={group.source} />
+                  <span className="book-cover-source">{sourceLabel(group.source)}</span>
+                </span>
                 {volumeMark ? <span className="book-cover-volume">{volumeMark}</span> : null}
               </span>
               <span className="book-cover-title">{group.name}</span>
               <span className="book-cover-foot">
                 <span className="book-cover-count">{label}</span>
-                <span className="book-cover-sync">{syncLabel(meta?.lastSync)}</span>
+                <span className="book-cover-sync">
+                  <IconSync className="sync-glyph" />
+                  {syncLabel(meta?.lastSync)}
+                </span>
               </span>
             </span>
             <span className="book-cover-inside">
@@ -310,6 +271,7 @@ export default function NotesPage() {
   const [openedId, setOpenedId] = useState("");
   const [openingId, setOpeningId] = useState("");
   const [closingId, setClosingId] = useState("");
+  const [syncingId, setSyncingId] = useState("");
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wanted = useRef<{ book: string; path: string } | null>(null);
   const reduced = useReducedMotion();
@@ -694,6 +656,46 @@ export default function NotesPage() {
     openTimer.current = setTimeout(() => setClosingId(""), BOOK_CLOSE_MS);
   };
 
+
+  const canSync = space?.role === "owner" || space?.role === "editor";
+  const bookSyncing = Boolean(openedBook && syncingId === openedBook.connection_id);
+
+  const triggerBookSync = useCallback(async () => {
+    if (!openedBook || !canSync) return;
+    const id = openedBook.connection_id;
+    setSyncingId(id);
+    setErr("");
+    try {
+      await api(`/v1/connections/${id}/sync`, { method: "POST" });
+      // Soft refresh meta after a beat so the sync stamp updates.
+      window.setTimeout(async () => {
+        try {
+          if (!space) return;
+          const c = await api<{ connections: ConnectionMeta[] }>(`/v1/spaces/${space.id}/connections`);
+          const conn = c.connections.find((x) => x.id === id);
+          if (conn) {
+            setMeta((prev) => ({
+              ...prev,
+              [id]: {
+                count: Number(conn.note_count ?? prev[id]?.count ?? 0),
+                capped: prev[id]?.capped ?? false,
+                lastSync: conn.last_sync_at ?? prev[id]?.lastSync ?? null,
+                status: conn.status ?? prev[id]?.status ?? "",
+              },
+            }));
+          }
+        } catch {
+          /* keep prior meta */
+        } finally {
+          setSyncingId((cur) => (cur === id ? "" : cur));
+        }
+      }, 2500);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "同步失败");
+      setSyncingId((cur) => (cur === id ? "" : cur));
+    }
+  }, [openedBook, canSync, space]);
+
   const openedMeta = openedBook ? meta[openedBook.connection_id] : undefined;
 
   return (
@@ -757,12 +759,26 @@ export default function NotesPage() {
               {folder ? "返回" : "放回书架"}
             </button>
             <span className="reading-meta">{countLabel(openedMeta)}</span>
-            <span className="reading-meta">{syncLabel(openedMeta?.lastSync)}</span>
+            <span className="reading-meta reading-meta-sync">
+              <IconSync spinning={bookSyncing} className="sync-glyph" />
+              {syncLabel(openedMeta?.lastSync)}
+            </span>
+            {canSync ? (
+              <button
+                type="button"
+                className="reading-sync-btn"
+                onClick={() => void triggerBookSync()}
+                disabled={bookSyncing}
+              >
+                <IconSync spinning={bookSyncing} className="sync-glyph" />
+                同步
+              </button>
+            ) : null}
           </div>
           <div className="notes-layout">
             <aside className="tree-pane">
               <div className="reading-plate" data-source={openedBook.source}>
-                <SourceMark source={openedBook.source} />
+                <IconSourceMark source={openedBook.source} />
                 <span>{sourceLabel(openedBook.source)}</span>
               </div>
               <button

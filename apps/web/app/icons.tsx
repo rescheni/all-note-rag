@@ -245,3 +245,77 @@ export function IconClose() {
     </Svg>
   );
 }
+
+/** Circular arrows — add `.icon-spin` via spinning for in-flight sync. */
+export function IconSync({
+  spinning = false,
+  className,
+}: {
+  spinning?: boolean;
+  className?: string;
+}) {
+  const cls = [spinning ? "icon-spin" : "", className].filter(Boolean).join(" ");
+  return (
+    <Svg className={cls || undefined}>
+      <Stroke d="M13.2 8 A5.2 5.2 0 1 1 11.4 3.6" />
+      <Stroke d="M11.2 2.4 L13.5 3.7 L11.6 5.6" />
+    </Svg>
+  );
+}
+
+/**
+ * Dedicated source marks — Feishu plane, Notion doc+N, SiYuan leaf/moss, Obsidian diamond.
+ * Use className "source-mark" (plates/covers) or "note-source-mark" (note desk).
+ */
+export function IconSourceMark({
+  source,
+  className = "source-mark",
+}: {
+  source: string;
+  className?: string;
+}) {
+  const common = {
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.5,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true as const,
+    className,
+  };
+  if (source === "obsidian") {
+    return (
+      <svg {...common}>
+        <path d="M12 2.8 19.2 9.6 16.2 21.2 7.8 19.4 4.6 10.4Z" />
+        <path d="M12 2.8 9.6 12.2l6.6 9" />
+        <path d="M4.6 10.4 9.6 12.2" />
+      </svg>
+    );
+  }
+  if (source === "siyuan") {
+    return (
+      <svg {...common}>
+        <path d="M12 3.2c2.7 2.8 4.2 5.1 4.2 7a4.2 4.2 0 0 1-8.4 0c0-1.9 1.5-4.2 4.2-7Z" />
+        <path d="M6.2 17.2c2 1.15 3.9 1.15 5.8 0s3.9-1.15 5.8 0" />
+        <path d="M6.2 20.3c2 1.15 3.9 1.15 5.8 0s3.9-1.15 5.8 0" />
+      </svg>
+    );
+  }
+  if (source === "notion") {
+    return (
+      <svg {...common}>
+        <path d="M5.5 5h9L18.5 9v10h-13Z" />
+        <path d="M14.5 5v4h4" />
+        <path d="M8.5 15.5V11l5 4.5V11" />
+      </svg>
+    );
+  }
+  /* feishu + fallback: paper-plane */
+  return (
+    <svg {...common}>
+      <path d="M4 12.5 20 4.5l-6 15-2.5-5.5Z" />
+      <path d="m11.5 14 4-6" />
+    </svg>
+  );
+}

@@ -1,5 +1,7 @@
 "use client";
 
+import { IconSync } from "./icons";
+
 export type SyncRunProgress = {
   id: string;
   started_at: string;
@@ -38,7 +40,10 @@ export function SyncRunStatus({ run }: { run: SyncRunProgress | null | undefined
     return (
       <div className="sync-progress">
         <div className="sync-progress-label">
-          <strong>同步中</strong>
+          <strong className="sync-progress-strong">
+            <IconSync spinning className="sync-glyph" />
+            同步中
+          </strong>
           <span>
             {listing
               ? "正在列出文件…"

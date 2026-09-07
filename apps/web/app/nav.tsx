@@ -13,7 +13,6 @@ import {
   IconLogout,
   IconMeetings,
   IconMembers,
-  IconAccount,
   IconMenu,
   IconNotes,
   IconSearch,
@@ -193,9 +192,6 @@ export function Nav() {
               <NavLink href="/ask" icon={<IconAsk />} onNavigate={closeMenu}>
                 问答
               </NavLink>
-              <NavLink href="/settings" icon={<IconSettings />} onNavigate={closeMenu}>
-                设置
-              </NavLink>
               <div className="nav-gap" />
               <NavLink href="/growth" icon={<IconGrowth />} onNavigate={closeMenu}>
                 成长
@@ -218,10 +214,10 @@ export function Nav() {
                   成员
                 </NavLink>
               )}
-              <NavLink href="/account" icon={<IconAccount />} onNavigate={closeMenu}>
-                账号
-              </NavLink>
               <div className="nav-foot">
+                <NavLink href="/settings" icon={<IconSettings />} onNavigate={closeMenu}>
+                  设置
+                </NavLink>
                 {userLabel ? (
                   <Link
                     href="/account"
