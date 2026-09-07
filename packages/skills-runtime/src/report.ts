@@ -27,6 +27,7 @@ export function renderWeeklyReport(opts: {
   to: string;
   events: HostGrowthEvent[];
   notes?: HostNote[];
+  excluded?: { ids?: string[]; paths?: string[] };
 }): string {
   const notes = new Map((opts.notes ?? []).map((n) => [n.id, n]));
   const lines: string[] = [
@@ -35,11 +36,20 @@ export function renderWeeklyReport(opts: {
     "中枢只读，本报告不写回任何源。仅个人空间。",
     "",
   ];
+  const exclPaths = (opts.excluded?.paths ?? []).filter(Boolean);
+  const exclIds = (opts.excluded?.ids ?? []).filter(Boolean);
+  if (exclPaths.length || exclIds.length) {
+    const bits: string[] = [];
+    if (exclPaths.length) bits.push(`路径/标题含 ${exclPaths.map((p) => `「${p}」`).join("、")}`);
+    if (exclIds.length) bits.push(`已勾选 ${exclIds.length} 篇笔记`);
+    lines.push(`> 已排除：${bits.join("；")}。`);
+    lines.push("");
+  }
   for (const sec of SECTION) {
     lines.push(`## ${sec.heading}`);
     const items = opts.events.filter((e) => e.kind === sec.kind);
     if (!items.length) {
-      lines.push("本周暂无。");
+      lines.push("本时段暂无。");
       lines.push("");
       continue;
     }
@@ -77,6 +87,15 @@ export function shanghaiYmd(d = new Date()): string {
 export function lastSevenDayRange(now = new Date()): { from: string; to: string } {
   const to = shanghaiYmd(now);
   const start = new Date(now.getTime() + 8 * 3600 * 1000 - 6 * 24 * 3600 * 1000);
+  const from = start.toISOString().slice(0, 10);
+  return { from, to };
+}
+
+/** Inclusive range ending today (Shanghai) spanning the last `days` calendar days. */
+export function lastNDayRange(days: number, now = new Date()): { from: string; to: string } {
+  const n = Math.max(1, Math.min(366, Math.floor(days) || 7));
+  const to = shanghaiYmd(now);
+  const start = new Date(now.getTime() + 8 * 3600 * 1000 - (n - 1) * 24 * 3600 * 1000);
   const from = start.toISOString().slice(0, 10);
   return { from, to };
 }

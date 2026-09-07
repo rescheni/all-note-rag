@@ -15,6 +15,8 @@ import {
   meetingExtractHandler,
   parseSkillMd,
   renderWeeklyReport,
+  filterExcludedGrowth,
+  parseStringList,
   officialSkillDir,
   writingHealthHandler,
 } from "../src/index.ts";
@@ -242,5 +244,66 @@ describe("writing-health", () => {
     expect(host.artifacts[0].kind).toBe("writing-health-report");
     const islands = host.artifacts[0].payload.islands as Array<{ id: string }>;
     expect(islands.some((n) => n.id === "n-island")).toBe(true);
+  });
+});
+
+describe("growth report excludes", () => {
+  it("parses comma lists and filters notes by id/path", async () => {
+    expect(parseStringList("垃圾桶, Trash")).toEqual(["垃圾桶", "Trash"]);
+    const notes = [
+      {
+        id: "n1",
+        path: "Daily/good.md",
+        title: "好日记",
+        markdown: "",
+        frontmatter: {},
+        updated_at: "2026-08-25T00:00:00.000Z",
+      },
+      {
+        id: "n2",
+        path: "垃圾桶/junk.md",
+        title: "junk",
+        markdown: "",
+        frontmatter: {},
+        updated_at: "2026-08-25T00:00:00.000Z",
+      },
+    ];
+    const events = [
+      {
+        note_id: "n1",
+        kind: "goal" as const,
+        happened_at: "2026-08-25T00:00:00.000Z",
+        payload: { title: "保留目标" },
+      },
+      {
+        note_id: "n2",
+        kind: "habit" as const,
+        happened_at: "2026-08-25T00:00:00.000Z",
+        payload: { title: "排除习惯" },
+      },
+    ];
+    const filtered = filterExcludedGrowth(events, notes, [], ["垃圾桶"]);
+    expect(filtered.events.map((e) => e.note_id)).toEqual(["n1"]);
+    const byId = filterExcludedGrowth(events, notes, ["n1"], []);
+    expect(byId.events.map((e) => e.note_id)).toEqual(["n2"]);
+
+    const host = createMemoryHost({
+      spaceId: "space-p",
+      userId: "u1",
+      notes,
+      events: events.map((e) => ({ ...e, space_id: "space-p" })),
+    });
+    const result = await growthWeeklyHandler({
+      space_id: "space-p",
+      space_kind: "personal",
+      hook: "weekly-report",
+      payload: { from: "2026-08-24", to: "2026-08-31", exclude_paths: ["垃圾桶"] },
+      host,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.markdown).toContain("保留目标");
+    expect(result.markdown).not.toContain("排除习惯");
+    expect(result.markdown).toContain("已排除");
+    expect(result.markdown).toContain("2026-08-24 ~ 2026-08-31");
   });
 });

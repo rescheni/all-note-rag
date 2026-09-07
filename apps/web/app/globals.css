@@ -476,6 +476,8 @@ input[type="email"],
 input[type="password"],
 input[type="url"],
 input[type="search"],
+input[type="date"],
+input[type="number"],
 textarea,
 select {
   width: 100%;
@@ -493,6 +495,8 @@ input[type="email"]:focus,
 input[type="password"]:focus,
 input[type="url"]:focus,
 input[type="search"]:focus,
+input[type="date"]:focus,
+input[type="number"]:focus,
 textarea:focus,
 select:focus {
   border-color: var(--accent);
@@ -3540,6 +3544,39 @@ button.heat-cell:hover { box-shadow: none; }
 .report-md .ask-md h2,
 .report-md .ask-md h3 {
   font-family: var(--font-display);
+}
+
+.growth-report-form .growth-days-row {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+}
+.growth-report-form .growth-days-row input[type="number"] {
+  max-width: 7rem;
+}
+.growth-exclude-list {
+  margin-top: 0.45rem;
+  max-height: 12rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  padding: 0.35rem 0.55rem;
+}
+.growth-exclude-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin: 0.2rem 0;
+  font-size: 0.875rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+.growth-exclude-item strong {
+  font-weight: 600;
+}
+.growth-range-label {
+  margin: 0 0 0.65rem;
 }
 
 

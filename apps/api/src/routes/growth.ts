@@ -5,6 +5,7 @@ import {
   ensureSkillOnSpace,
   growthAccessError,
   lastSevenDayRange,
+  parseStringList,
   runOfficialHook,
   type GrowthKind,
 } from "@note-hub/skills-runtime";
@@ -36,6 +37,59 @@ async function loadPersonalOwner(userId: string, spaceId: string): Promise<Perso
   return { ok: true, space, mem: gate.mem };
 }
 
+function reportParams(c: { req: { query: (k: string) => string | undefined } }, body?: Record<string, unknown>) {
+  const range = lastSevenDayRange();
+  const from =
+    (typeof body?.from === "string" && body.from) ||
+    c.req.query("from") ||
+    range.from;
+  const to =
+    (typeof body?.to === "string" && body.to) ||
+    c.req.query("to") ||
+    range.to;
+  const exclude_ids = parseStringList(
+    body?.exclude_ids ?? body?.excludeIds ?? c.req.query("exclude_ids") ?? c.req.query("exclude"),
+  );
+  const exclude_paths = parseStringList(
+    body?.exclude_paths ?? body?.excludePaths ?? c.req.query("exclude_paths") ?? c.req.query("exclude_path"),
+  );
+  return { from, to, exclude_ids, exclude_paths };
+}
+
+async function runGrowthReport(
+  userId: string,
+  spaceId: string,
+  params: { from: string; to: string; exclude_ids: string[]; exclude_paths: string[] },
+) {
+  await ensureSkillOnSpace(query, spaceId, "growth-weekly");
+  const host = createPgHostApi({ query, spaceId, userId });
+  const result = await runOfficialHook("growth-weekly", {
+    space_id: spaceId,
+    space_kind: "personal",
+    hook: "weekly-report",
+    payload: {
+      from: params.from,
+      to: params.to,
+      exclude_ids: params.exclude_ids,
+      exclude_paths: params.exclude_paths,
+    },
+    host,
+  });
+  const latest = await query(
+    `SELECT id, space_id, range_from, range_to, markdown, created_at
+     FROM growth_reports WHERE space_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [spaceId],
+  );
+  return {
+    from: params.from,
+    to: params.to,
+    exclude_ids: params.exclude_ids,
+    exclude_paths: params.exclude_paths,
+    markdown: result.markdown ?? latest.rows[0]?.markdown ?? "",
+    report: latest.rows[0] ?? null,
+  };
+}
+
 growthRoutes.get("/spaces/:id/growth/report", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
@@ -45,29 +99,24 @@ growthRoutes.get("/spaces/:id/growth/report", async (c) => {
   if (!loaded.ok && loaded.error === "growth") {
     return jsonError(c, 400, loaded.growthErr.code, loaded.growthErr.message);
   }
-  await ensureSkillOnSpace(query, spaceId, "growth-weekly");
-  const range = lastSevenDayRange();
-  const from = c.req.query("from") || range.from;
-  const to = c.req.query("to") || range.to;
-  const host = createPgHostApi({ query, spaceId, userId: user.id });
-  const result = await runOfficialHook("growth-weekly", {
-    space_id: spaceId,
-    space_kind: "personal",
-    hook: "weekly-report",
-    payload: { from, to },
-    host,
-  });
-  const latest = await query(
-    `SELECT id, space_id, range_from, range_to, markdown, created_at
-     FROM growth_reports WHERE space_id = $1 ORDER BY created_at DESC LIMIT 1`,
-    [spaceId],
-  );
-  return c.json({
-    from,
-    to,
-    markdown: result.markdown ?? latest.rows[0]?.markdown ?? "",
-    report: latest.rows[0] ?? null,
-  });
+  const params = reportParams(c);
+  const out = await runGrowthReport(user.id, spaceId, params);
+  return c.json(out);
+});
+
+growthRoutes.post("/spaces/:id/growth/report", async (c) => {
+  const user = c.get("user");
+  const spaceId = c.req.param("id");
+  const loaded = await loadPersonalOwner(user.id, spaceId);
+  if (!loaded.ok && loaded.error === "not_found") return errors.notFound(c);
+  if (!loaded.ok && loaded.error === "forbidden") return errors.forbidden(c);
+  if (!loaded.ok && loaded.error === "growth") {
+    return jsonError(c, 400, loaded.growthErr.code, loaded.growthErr.message);
+  }
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const params = reportParams(c, body);
+  const out = await runGrowthReport(user.id, spaceId, params);
+  return c.json(out);
 });
 
 growthRoutes.get("/spaces/:id/growth", async (c) => {
