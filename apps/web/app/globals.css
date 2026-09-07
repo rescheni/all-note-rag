@@ -2727,19 +2727,6 @@ button.heat-cell:hover { box-shadow: none; }
   opacity: 1;
 }
 
-.shelf-hint {
-  margin: 1.75rem 0 0;
-  color: var(--muted);
-  font-size: 0.8125rem;
-  display: flex;
-  gap: 0.55rem;
-  flex-wrap: wrap;
-}
-.shelf-hint span::before {
-  content: "·";
-  margin-right: 0.55rem;
-  color: var(--line);
-}
 .shelf-recent {
   margin: 2.4rem 0 0;
   max-width: 44rem;
@@ -3405,20 +3392,6 @@ button.heat-cell:hover { box-shadow: none; }
 .home-source-group .conn-card {
   margin: 0;
 }
-.shelf-readd {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 0.85rem;
-  margin: 0.35rem 0 0.85rem;
-  font-size: 0.8125rem;
-}
-.shelf-readd a {
-  color: var(--muted);
-}
-.shelf-readd a:hover {
-  color: var(--accent);
-}
-
 /* ---- PWA install hint (healing, non-naggy) ---- */
 .pwa-install-hint {
   position: fixed;
@@ -3697,7 +3670,6 @@ html[data-theme="ink"] .source-book {
   color: var(--ink);
 }
 html[data-theme="ink"] .library-head h1,
-html[data-theme="ink"] .shelf-hint,
 html[data-theme="ink"] .reading-bar {
   color: var(--ink);
 }

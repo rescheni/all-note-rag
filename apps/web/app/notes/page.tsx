@@ -560,15 +560,6 @@ export default function NotesPage() {
       ),
     [groups],
   );
-  const shelfTally = useMemo(() => {
-    const counted = shelf.filter((b) => meta[b.group.connection_id]);
-    const total = counted.reduce((sum, b) => sum + (meta[b.group.connection_id]?.count ?? 0), 0);
-    const capped = counted.some((b) => meta[b.group.connection_id]?.capped);
-    return {
-      sources: new Set(shelf.map((b) => b.group.source)).size,
-      notes: counted.length === shelf.length ? `${total}${capped ? "+" : ""} 篇` : "",
-    };
-  }, [shelf, meta]);
   const openedBook = useMemo(
     () => groups.find((g) => g.connection_id === openedId) ?? null,
     [groups, openedId],
@@ -1039,22 +1030,6 @@ export default function NotesPage() {
                   />
                 ))}
               </div>
-              <p className="shelf-hint">
-                点一本书，翻开它的目录
-                <span>{shelf.length} 本</span>
-                <span>{shelfTally.sources} 个源</span>
-                {shelfTally.notes ? <span>{shelfTally.notes}</span> : null}
-              </p>
-              {(space?.role === "owner" || space?.role === "editor") && (
-                <p className="shelf-readd">
-                  {SOURCE_ORDER.filter((s) => shelf.some((x) => x.group.source === s)).map((s) => (
-                    <Link key={s} href={`/connections/new?source=${s}`}>
-                      再接入{sourceLabel(s)}
-                    </Link>
-                  ))}
-                  <Link href="/connections">管理来源</Link>
-                </p>
-              )}
               {recent.length ? (
                 <section className="shelf-recent">
                   <h2>最近改动</h2>
