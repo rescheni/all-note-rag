@@ -68,7 +68,7 @@ export function composeExtractiveAnswer(query: string, hits: RetrieveHit[]): Ask
     return { unknown: true, answer_markdown: UNKNOWN_ANSWER, citations: [], mode: "extractive" };
   }
   const used = hits.slice(0, 5);
-  const lines: string[] = [`根据当前空间笔记，与「${query.trim()}」相关的依据如下：`, ""];
+  const lines: string[] = [`根据当前空间笔记，与「${query.trim()}」相关的参考如下（摘录，供进一步理解）：`, ""];
   for (const h of used) {
     lines.push(`**${h.title}**`);
     lines.push(`> ${h.quote}`);
@@ -192,16 +192,22 @@ async function callChat(query: string, hits: RetrieveHit[], chat: ChatConfig): P
       },
       body: JSON.stringify({
         model: chat.model || "gpt-4o-mini",
-        temperature: 0.2,
+        temperature: 0.4,
         messages: [
           {
             role: "system",
             content:
-              "你是笔记中枢的只读问答助手。只能根据提供的笔记片段作答，使用中文 Markdown。必须能对应片段编号，禁止编造片段中没有的事实。若片段无法回答，只回复：不知道",
+              "你是笔记中枢的只读问答助手。使用中文 Markdown 作答。\n" +
+              "笔记片段是参考材料，用来辅助思考与作答，不是唯一合法答案来源，也不是闭卷考试。\n" +
+              "请综合片段中的观点、语境，并结合合理常识给出有帮助的回答；可以适度推理与概括。\n" +
+              "优先呼应、引用相关片段，文中用【编号】标出依据。片段若只是提问、残缺或弱相关，仍应尽力给出有用回答，并可说明「依据笔记较少，以下结合相关讨论与一般理解」。\n" +
+              "不要因为片段里没有「标准定义句」就拒绝回答。\n" +
+              "仅当片段与问题完全无关、且无法形成任何有意义回答时，才回复：不知道。\n" +
+              "不要编造不存在的笔记标题或编号；一般常识可以写，但勿伪称来自某条笔记。",
           },
           {
             role: "user",
-            content: `问题：${query}\n\n笔记片段：\n${numbered}\n\n请作答；文中用【编号】标出依据。`,
+            content: `问题：${query}\n\n参考笔记片段：\n${numbered}\n\n请结合上述参考作答（参考而非唯一依据）；有依据处用【编号】标出。`,
           },
         ],
       }),
