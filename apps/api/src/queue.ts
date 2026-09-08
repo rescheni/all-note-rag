@@ -21,14 +21,15 @@ export const FILE_SYNC_DEBOUNCE_MS = 1_500;
 
 /**
  * Close sync_run rows left open after worker crash / hung adapter.
- * - Never listed files (files_total=0): stale after 2 minutes
+ * - Never listed files (files_total=0): stale after 15 minutes
+ *   (SiYuan official S3 listChanges often takes 4+ minutes)
  * - Listed but no finish: stale after 45 minutes (matches UI SYNC_RUN_STALE_MS)
  */
 export async function markZombieSyncRuns(): Promise<void> {
   await query(
     `UPDATE sync_run SET finished_at = now()
      WHERE finished_at IS NULL AND (
-       (COALESCE(files_total, 0) = 0 AND started_at < now() - interval '2 minutes')
+       (COALESCE(files_total, 0) = 0 AND started_at < now() - interval '15 minutes')
        OR started_at < now() - interval '45 minutes'
      )`,
   );

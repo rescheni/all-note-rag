@@ -49,10 +49,11 @@ function createMutex() {
 }
 
 export async function markZombieSyncRuns(): Promise<void> {
+  // Listing-only timeout must exceed slow adapters (SiYuan official S3 ~4min+).
   await query(
     `UPDATE sync_run SET finished_at = now()
      WHERE finished_at IS NULL AND (
-       (COALESCE(files_total, 0) = 0 AND started_at < now() - interval '2 minutes')
+       (COALESCE(files_total, 0) = 0 AND started_at < now() - interval '15 minutes')
        OR started_at < now() - interval '45 minutes'
      )`,
   );
@@ -477,6 +478,12 @@ async function processNote(
 ): Promise<ProcessResult> {
   const payload = await adapter.fetchNote(ctx, sourceId);
   if (!payload) {
+    // Feishu/SiYuan emit explicit delete changes from listChanges. A null fetch on an
+    // upsert is almost always transient (timeout / decrypt miss) — soft-deleting here
+    // caused Feishu delete↔upsert churn and wiped SiYuan notes after S3 blips.
+    if (conn.source === "feishu" || conn.source === "siyuan") {
+      throw new Error(`fetchNote returned null for ${sourceId}`);
+    }
     await query(
       "UPDATE notes SET deleted_at = now(), updated_at = now() WHERE connection_id = $1 AND source_id = $2 AND deleted_at IS NULL",
       [conn.id, sourceId],
@@ -1000,29 +1007,65 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
       logAborted(connectionId, "full-sync");
       return;
     }
-    // Notion (and similar) watermarks live in nextCursor.last_edited_time.
-    // persistCursorMeta only keeps Siyuan/box meta keys, so we must write the
-    // watermark here — and only when nothing failed, otherwise a partial run
+    // persistCursorMeta only keeps Siyuan/box meta keys (files/indexId/…).
+    // Notion uses last_edited_time; Feishu stores per-doc objToken→edit (+ __meta).
+    // Write those watermarks only when nothing failed, otherwise a partial run
     // would skip unprocessed pages forever on the next incremental sync.
-    const watermarkPatch: Record<string, unknown> = {};
-    if (tallies.failed === 0 && typeof cursor.last_edited_time === "string" && cursor.last_edited_time) {
-      watermarkPatch.last_edited_time = cursor.last_edited_time;
-    }
-    if (Object.keys(watermarkPatch).length) {
+    if (tallies.failed === 0 && conn.source === "feishu") {
+      // Full replace: nextCursor is the complete live wiki/doc edit map.
+      await query(
+        `UPDATE connections SET
+           cursor = $2::jsonb,
+           last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now()
+         WHERE id = $1`,
+        [connectionId, JSON.stringify(cursor)],
+      );
+    } else if (tallies.failed === 0 && conn.source === "siyuan" && cursor.etags && typeof cursor.etags === "object") {
+      // Bulk-write etags (+ meta already via persistCursorMeta). Avoid relying only on
+      // per-file jsonb_set against a multi-MB official cursor.
+      const siyuanPatch: Record<string, unknown> = { etags: cursor.etags };
+      for (const key of ["files", "indexId", "repoRoot", "boxNames", "boxes", "keys"] as const) {
+        if (cursor[key] !== undefined) siyuanPatch[key] = cursor[key];
+      }
       await query(
         `UPDATE connections SET
            cursor = COALESCE(cursor, '{}'::jsonb) || $2::jsonb,
            last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now()
          WHERE id = $1`,
-        [connectionId, JSON.stringify(watermarkPatch)],
+        [connectionId, JSON.stringify(siyuanPatch)],
       );
     } else {
-      await query(
-        "UPDATE connections SET last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now() WHERE id = $1",
-        [connectionId],
-      );
+      const watermarkPatch: Record<string, unknown> = {};
+      if (tallies.failed === 0 && typeof cursor.last_edited_time === "string" && cursor.last_edited_time) {
+        watermarkPatch.last_edited_time = cursor.last_edited_time;
+      }
+      if (Object.keys(watermarkPatch).length) {
+        await query(
+          `UPDATE connections SET
+             cursor = COALESCE(cursor, '{}'::jsonb) || $2::jsonb,
+             last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now()
+           WHERE id = $1`,
+          [connectionId, JSON.stringify(watermarkPatch)],
+        );
+      } else {
+        await query(
+          "UPDATE connections SET last_sync_at = now(), last_error = NULL, status = 'active', updated_at = now() WHERE id = $1",
+          [connectionId],
+        );
+      }
     }
-    await writer.finish(progress, cursor);
+    try {
+      await writer.finish(progress, cursor);
+    } catch (finishErr) {
+      // Huge official SiYuan cursors (~3MB+) have blown up cursor_after writes; still close the run.
+      console.error(JSON.stringify({
+        level: "error",
+        message: "sync_run cursor_after write failed; finishing without cursor",
+        connection_id: connectionId,
+        error: finishErr instanceof Error ? finishErr.message : String(finishErr),
+      }));
+      await writer.finish(progress);
+    }
     console.log(
       JSON.stringify({
         level: "info",

@@ -4,6 +4,7 @@ import {
   ListObjectsV2Command,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import {
   collectAssetRefs,
   guessContentType,
@@ -82,6 +83,11 @@ function createS3Client(ctx: AdapterContext, injected?: S3Client): S3Client {
       secrets?.access_key && secrets?.secret_key
         ? { accessKeyId: secrets.access_key, secretAccessKey: secrets.secret_key }
         : undefined,
+    // Official SiYuan repos issue thousands of GETs; a single hung socket used to stall sync forever.
+    requestHandler: new NodeHttpHandler({
+      connectionTimeout: 15_000,
+      requestTimeout: 120_000,
+    }),
   });
 }
 
@@ -111,7 +117,7 @@ function s3Store(ctx: AdapterContext, client: S3Client): ObjectStore {
     async get(key: string) {
       try {
         const resp = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-        return streamToBytes(resp.Body);
+        return await streamToBytes(resp.Body);
       } catch {
         return null;
       }

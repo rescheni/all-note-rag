@@ -24,7 +24,8 @@ new Worker(
       void kickExtractDrain();
     }
   },
-  { connection, concurrency: 4 },
+  // SiYuan official listChanges alone can take 4+ minutes; keep the lock alive.
+  { connection, concurrency: 4, lockDuration: 600_000, stalledInterval: 120_000 },
 );
 
 new Worker(
