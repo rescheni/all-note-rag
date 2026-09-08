@@ -106,6 +106,133 @@ settingsRoutes.get("/settings/ai/models", async (c) => {
   }
 });
 
+
+/** Pure chat/completions probe against saved Base URL + API Key (no notes retrieval). */
+settingsRoutes.post("/settings/ai/test", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as {
+    model?: unknown;
+    prompt?: unknown;
+  };
+  const resolved = await loadAiSettings(query, env.hubSecret);
+  const base = resolved.base_url.trim().replace(/\/+$/, "");
+  const key = resolved.api_key.trim();
+  const model =
+    (typeof body.model === "string" && body.model.trim()
+      ? body.model.trim()
+      : resolved.chat_model.trim()) || "gpt-4o-mini";
+  const prompt =
+    typeof body.prompt === "string" && body.prompt.trim()
+      ? body.prompt.trim()
+      : "用一句话介绍你自己";
+
+  if (!base || !key) {
+    return c.json({
+      ok: false as const,
+      error: "ai_not_configured",
+      detail: "请先填写并保存 Base URL 与 API Key",
+    });
+  }
+  if (!/^https?:\/\//i.test(base)) {
+    return c.json({
+      ok: false as const,
+      error: "invalid_request",
+      detail: "Base URL 需要 http(s) 地址",
+    });
+  }
+
+  const url = `${base}/chat/completions`;
+  const started = Date.now();
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60000);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${key}`,
+        accept: "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        messages: [{ role: "user", content: prompt }],
+      }),
+      signal: ctrl.signal,
+    }).finally(() => clearTimeout(timer));
+    const latency_ms = Date.now() - started;
+    const raw = await res.text();
+    const snippet = raw.trim().slice(0, 800);
+
+    if (!res.ok) {
+      let detail = snippet || `上游返回 HTTP ${res.status}`;
+      try {
+        const j = JSON.parse(raw) as {
+          error?: { message?: string };
+          message?: string;
+        };
+        const m = j?.error?.message || j?.message;
+        if (typeof m === "string" && m.trim()) detail = m.trim().slice(0, 400);
+      } catch {
+        /* keep snippet */
+      }
+      return c.json({
+        ok: false as const,
+        error: "upstream_failed",
+        status: res.status,
+        detail,
+        model,
+        latency_ms,
+      });
+    }
+
+    let text = "";
+    try {
+      const parsed = JSON.parse(raw) as {
+        choices?: { message?: { content?: string } }[];
+      };
+      text = parsed.choices?.[0]?.message?.content?.trim() ?? "";
+    } catch {
+      return c.json({
+        ok: false as const,
+        error: "bad_response",
+        status: res.status,
+        detail: snippet || "上游返回了非 JSON",
+        model,
+        latency_ms,
+      });
+    }
+    if (!text) {
+      return c.json({
+        ok: false as const,
+        error: "empty_response",
+        status: res.status,
+        detail: snippet || "上游未返回文本内容",
+        model,
+        latency_ms,
+      });
+    }
+    return c.json({
+      ok: true as const,
+      text,
+      model,
+      latency_ms,
+    });
+  } catch (e) {
+    const latency_ms = Date.now() - started;
+    const msg = e instanceof Error ? e.message : String(e);
+    const detail = /abort/i.test(msg)
+      ? "请求超时，请检查 Base URL 是否可达"
+      : msg.slice(0, 240) || "网络错误";
+    return c.json({
+      ok: false as const,
+      error: /abort/i.test(msg) ? "timeout" : "network_failed",
+      detail,
+      model,
+      latency_ms,
+    });
+  }
+});
+
 /** Catalog of downloadable local ONNX embed models + disk status. */
 settingsRoutes.get("/settings/ai/local-embed-models", async (c) => {
   const models = listLocalEmbedModels();

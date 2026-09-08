@@ -4354,6 +4354,52 @@ button.heat-cell:hover { box-shadow: none; }
   font-size: 1rem;
   font-weight: 600;
 }
+
+/* ---- AI test probe (settings) ---- */
+.ai-test-section {
+  margin: 0.85rem 0 0.35rem;
+  padding: 0.85rem 0.95rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--paper) 90%, var(--bg));
+}
+.ai-test-section .settings-subhead {
+  margin-top: 0;
+}
+.ai-test-result {
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+.ai-test-ok {
+  background: color-mix(in srgb, var(--moss-wash) 60%, var(--paper));
+}
+.ai-test-err {
+  background: color-mix(in srgb, #c45c5c 8%, var(--paper));
+  border-color: color-mix(in srgb, #c45c5c 35%, var(--line));
+}
+.ai-test-markdown {
+  margin-top: 0.35rem;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.ai-test-markdown p { margin: 0.35rem 0; }
+.ai-test-detail {
+  margin: 0.45rem 0 0;
+  padding: 0.55rem 0.65rem;
+  max-height: 14rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--paper) 70%, #1a1a1a 6%);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
 .embed-provider-tabs {
   margin: 0.35rem 0 0.85rem;
 }

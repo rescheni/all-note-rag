@@ -3,6 +3,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, getToken } from "@/lib/api";
 import { AmbientPanel } from "../ambient/ambient-settings";
 import { ThemePanel } from "../theme/theme-settings";
+import { SafeMarkdown } from "@/lib/safe-markdown";
 
 type EmbedProvider = "api" | "local";
 
@@ -188,6 +189,14 @@ export default function SettingsPage() {
   const [localDir, setLocalDir] = useState("");
   const [localErr, setLocalErr] = useState("");
   const [downloadBusy, setDownloadBusy] = useState<string | null>(null);
+  const [testModel, setTestModel] = useState("");
+  const [testPrompt, setTestPrompt] = useState("用一句话介绍你自己");
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResult, setTestResult] = useState<
+    | { ok: true; text: string; model: string; latency_ms: number }
+    | { ok: false; error: string; status?: number; detail?: string; model?: string; latency_ms?: number }
+    | null
+  >(null);
 
   const chatOptions = useMemo(() => models.filter((m) => looksChat(m.id)), [models]);
   const embedOptions = useMemo(() => {
@@ -232,6 +241,7 @@ export default function SettingsPage() {
       .then((out) => {
         setCfg(out);
         setChatModel(out.chat_model ?? "");
+        setTestModel(out.chat_model ?? "");
         setEmbedModel(out.embedding_model ?? "");
         setEmbedProvider(out.embed_provider === "local" ? "local" : "api");
         setBaseUrlDraft(out.base_url ?? "");
@@ -342,6 +352,55 @@ export default function SettingsPage() {
     }
   }
 
+
+  async function runAiTest() {
+    setTestResult(null);
+    setTestBusy(true);
+    try {
+      const out = await api<{
+        ok: boolean;
+        text?: string;
+        model?: string;
+        latency_ms?: number;
+        error?: string;
+        status?: number;
+        detail?: string;
+      }>("/v1/settings/ai/test", {
+        method: "POST",
+        body: JSON.stringify({
+          model: (testModel.trim() || chatModel.trim()) || undefined,
+          prompt: testPrompt.trim() || undefined,
+        }),
+        timeoutMs: 70000,
+      });
+      if (out.ok && typeof out.text === "string") {
+        setTestResult({
+          ok: true,
+          text: out.text,
+          model: out.model || testModel || chatModel,
+          latency_ms: out.latency_ms ?? 0,
+        });
+      } else {
+        setTestResult({
+          ok: false,
+          error: out.error || "upstream_failed",
+          status: out.status,
+          detail: out.detail,
+          model: out.model,
+          latency_ms: out.latency_ms,
+        });
+      }
+    } catch (e) {
+      setTestResult({
+        ok: false,
+        error: "request_failed",
+        detail: e instanceof Error ? e.message : "请求失败",
+      });
+    } finally {
+      setTestBusy(false);
+    }
+  }
+
   function switchProvider(next: EmbedProvider) {
     setEmbedProvider(next);
     if (next === "local") {
@@ -416,10 +475,79 @@ export default function SettingsPage() {
             name="chat_model"
             label="Chat 模型"
             value={chatModel}
-            onChange={setChatModel}
+            onChange={(v) => {
+              setChatModel(v);
+              if (!testModel.trim() || testModel === chatModel) setTestModel(v);
+            }}
             options={chatOptions.length ? chatOptions : models}
             placeholder="gpt-4o-mini"
           />
+        </div>
+
+        <div className="ai-test-section">
+          <h3 className="settings-subhead">测试 AI</h3>
+          <p className="hint">
+            直接调用已保存端点的 chat/completions，不检索笔记。用于确认网关、密钥与模型是否可用。
+          </p>
+          <ModelCombo
+            id="test_model"
+            name="test_model"
+            label="测试模型"
+            value={testModel || chatModel}
+            onChange={setTestModel}
+            options={chatOptions.length ? chatOptions : models}
+            placeholder={chatModel || "gpt-4o-mini"}
+          />
+          <div className="field">
+            <label htmlFor="test_prompt">测试提示词</label>
+            <textarea
+              id="test_prompt"
+              name="test_prompt"
+              rows={3}
+              value={testPrompt}
+              onChange={(e) => setTestPrompt(e.target.value)}
+              placeholder="用一句话介绍你自己"
+            />
+          </div>
+          <div className="model-toolbar">
+            <button
+              type="button"
+              className="secondary"
+              disabled={testBusy || !cfg?.configured}
+              onClick={() => void runAiTest()}
+              title={cfg?.configured ? "发送一次纯聊天测试" : "请先保存 Base URL 与 API Key"}
+            >
+              {testBusy ? "测试中…" : "发送测试"}
+            </button>
+            {!cfg?.configured ? (
+              <span className="hint">需先保存端点配置</span>
+            ) : null}
+          </div>
+          {testResult?.ok ? (
+            <div className="ai-test-result ai-test-ok" aria-live="polite">
+              <p className="hint">
+                成功 · {testResult.model} · {testResult.latency_ms} ms
+              </p>
+              <article className="ai-test-markdown">
+                <SafeMarkdown source={testResult.text} />
+              </article>
+            </div>
+          ) : null}
+          {testResult && !testResult.ok ? (
+            <div className="ai-test-result ai-test-err" role="alert">
+              <p className="err">
+                测试失败
+                {testResult.status != null ? `（HTTP ${testResult.status}）` : ""}
+                {testResult.error ? ` · ${testResult.error}` : ""}
+              </p>
+              {testResult.detail ? (
+                <pre className="ai-test-detail">{testResult.detail}</pre>
+              ) : null}
+              {testResult.latency_ms != null ? (
+                <p className="hint">{testResult.latency_ms} ms</p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <h3 className="settings-subhead">嵌入模型</h3>
