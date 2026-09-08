@@ -24,6 +24,9 @@ export {
 
 const FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
 const FEISHU_API = "https://open.feishu.cn/open-apis";
+
+/** Shown when user_access_token expired and refresh_token is missing or refresh fails. */
+const FEISHU_USER_TOKEN_EXPIRED_MSG = "用户令牌已过期且无法刷新，请重新扫码（需刷新令牌 / offline_access）";
 const SKIP_TYPES = new Set(["sheet", "bitable", "mindnote", "slides", "folder"]);
 const USER_TOKEN_AUTH_CODES = new Set([99991661, 99991663, 99991664, 99991668, 99991677]);
 /** Skip absurd media so one huge video can never blow up a note ingest. */
@@ -40,6 +43,7 @@ function asDict(v: unknown): Record<string, unknown> | null {
 }
 
 export class FeishuAdapter implements Adapter {
+  private lastUserRefreshError: string | undefined;
   private tenantToken: string | null = null;
   private userRefreshed = false;
   private noteMeta = new Map<string, { title: string; path: string; objType: string }>();
@@ -95,7 +99,10 @@ export class FeishuAdapter implements Adapter {
     this.userRefreshed = true;
     const refreshToken = ctx.secrets?.refresh_token?.trim();
     const client = feishuOAuthClient(ctx.secrets);
-    if (!refreshToken || !client) return undefined;
+    if (!refreshToken || !client) {
+      this.lastUserRefreshError = FEISHU_USER_TOKEN_EXPIRED_MSG;
+      return undefined;
+    }
     try {
       const tokens = await refreshFeishuAccessToken({
         refreshToken,
@@ -105,6 +112,7 @@ export class FeishuAdapter implements Adapter {
       });
       const next = applyFeishuOAuthSecrets(ctx.secrets, tokens);
       ctx.secrets = next;
+      this.lastUserRefreshError = undefined;
       if (ctx.persistSecrets) {
         try {
           await ctx.persistSecrets(next);
@@ -114,6 +122,7 @@ export class FeishuAdapter implements Adapter {
       }
       return tokens.access_token;
     } catch {
+      this.lastUserRefreshError = FEISHU_USER_TOKEN_EXPIRED_MSG;
       return undefined;
     }
   }
@@ -164,7 +173,11 @@ export class FeishuAdapter implements Adapter {
         const { res, json } = await this.apiJson(ctx, u.toString());
         if (res.ok && Number(json.code ?? 0) === 0) return { ok: true, status: "active" };
         if (this.isTokenAuthError(res, json)) {
-          return { ok: false, status: "error", message: "飞书用户授权已失效，请重新扫码登录" };
+          return {
+            ok: false,
+            status: "error",
+            message: this.lastUserRefreshError || FEISHU_USER_TOKEN_EXPIRED_MSG,
+          };
         }
       } catch (err) {
         return { ok: false, status: "error", message: err instanceof Error ? err.message : String(err) };

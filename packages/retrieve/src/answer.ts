@@ -17,6 +17,10 @@ export type AskResponse = {
   unknown?: true;
   /** How the answer was produced. */
   mode?: "ai" | "extractive";
+  /** True when chat was attempted but failed; answer is extractive fallback. */
+  ai_failed?: boolean;
+  /** Short Chinese reason for AI failure (safe to show in UI). */
+  ai_error?: string;
 };
 
 export type ChatConfig = {
@@ -77,11 +81,29 @@ export function composeExtractiveAnswer(query: string, hits: RetrieveHit[]): Ask
   };
 }
 
+/** Short Chinese label for UI when chat upstream fails. */
+export function shortAiError(err: ChatUpstreamError): string {
+  switch (err.code) {
+    case "ai_quota_exceeded":
+      return "大模型额度不足";
+    case "ai_auth_failed":
+      return "AI 鉴权失败";
+    case "ai_timeout":
+      return "大模型请求超时";
+    case "ai_network_failed":
+      return "无法连接大模型";
+    case "ai_bad_response":
+      return "大模型返回异常";
+    default:
+      return err.message?.slice(0, 48) || "AI 未能生成";
+  }
+}
+
 /**
  * Compose an Ask answer.
  * - No chat config → extractive (mode: extractive).
- * - Chat configured → must call chat completions; on failure throws ChatUpstreamError
- *   (does NOT silently fall back to extractive).
+ * - Chat configured → call chat completions; on failure return extractive with
+ *   ai_failed/ai_error (does not throw for quota/upstream when retrieval has hits).
  */
 export async function composeAskAnswer(
   query: string,
@@ -91,12 +113,24 @@ export async function composeAskAnswer(
   const extractive = composeExtractiveAnswer(query, hits);
   if (extractive.unknown) return extractive;
   if (!chat?.baseUrl || !chat?.apiKey) return extractive;
-  const md = await callChat(query, hits, chat);
-  const trimmed = md.trim();
-  if (!trimmed || trimmed === UNKNOWN_ANSWER) {
-    return { answer_markdown: UNKNOWN_ANSWER, citations: [], unknown: true, mode: "ai" };
+  try {
+    const md = await callChat(query, hits, chat);
+    const trimmed = md.trim();
+    if (!trimmed || trimmed === UNKNOWN_ANSWER) {
+      return { answer_markdown: UNKNOWN_ANSWER, citations: [], unknown: true, mode: "ai" };
+    }
+    return { answer_markdown: trimmed, citations: extractive.citations, mode: "ai" };
+  } catch (e) {
+    if (e instanceof ChatUpstreamError) {
+      return {
+        ...extractive,
+        mode: "extractive",
+        ai_failed: true,
+        ai_error: shortAiError(e),
+      };
+    }
+    throw e;
   }
-  return { answer_markdown: trimmed, citations: extractive.citations, mode: "ai" };
 }
 
 function friendlyUpstreamMessage(status: number, raw: string): { message: string; code: string } {

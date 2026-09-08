@@ -7,6 +7,7 @@ import {
   hybridRetrieve,
   loadChunksViaSql,
   loadVectorChunksViaSql,
+  shortAiError,
   UNKNOWN_ANSWER,
 } from "@note-hub/retrieve";
 import {
@@ -55,6 +56,8 @@ type MessageRow = {
   content: string;
   citations: unknown;
   mode: string | null;
+  ai_failed: boolean;
+  ai_error: string | null;
   created_at: string;
 };
 
@@ -163,7 +166,8 @@ askRoutes.get("/spaces/:id/ask/threads/:tid/messages", async (c) => {
   if (!thread) return errors.notFound(c, "对话不存在");
 
   const r = await query<MessageRow>(
-    `SELECT id, thread_id, role, content, citations, mode, created_at
+    `SELECT id, thread_id, role, content, citations, mode,
+            COALESCE(ai_failed, false) AS ai_failed, ai_error, created_at
      FROM ask_messages
      WHERE thread_id = $1
      ORDER BY created_at ASC, id ASC`,
@@ -263,6 +267,8 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
     citations: unknown;
     mode: string;
     unknown?: boolean;
+    ai_failed?: boolean;
+    ai_error?: string;
   }) => {
     if (!q.trim()) {
       return { thread_id: thread?.id as string | undefined };
@@ -291,13 +297,15 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
       [thread.id, q],
     );
     await query(
-      `INSERT INTO ask_messages (thread_id, role, content, citations, mode)
-       VALUES ($1, 'assistant', $2, $3::jsonb, $4)`,
+      `INSERT INTO ask_messages (thread_id, role, content, citations, mode, ai_failed, ai_error)
+       VALUES ($1, 'assistant', $2, $3::jsonb, $4, $5, $6)`,
       [
         thread.id,
         payload.answer_markdown,
         JSON.stringify(payload.citations ?? []),
         payload.mode,
+        Boolean(payload.ai_failed),
+        payload.ai_error ?? null,
       ],
     );
     return { thread_id: thread.id };
@@ -327,20 +335,26 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
       ? await composeAskAnswer(q, retrieved.hits, chat)
       : composeExtractiveAnswer(q, retrieved.hits);
   } catch (e) {
+    // Safety net: never 502/HTML when retrieval already succeeded — fall back to extractive JSON.
     if (e instanceof ChatUpstreamError) {
       console.error(
         JSON.stringify({
           level: "error",
-          message: "ask chat upstream failed",
+          message: "ask chat upstream failed; falling back to extractive",
           code: e.code,
           error: e.message,
           status: e.status,
         }),
       );
-      const status = e.status === 401 || e.status === 403 ? 400 : 502;
-      return jsonError(c, status as 400 | 502, e.code, e.message);
+      answer = {
+        ...composeExtractiveAnswer(q, retrieved.hits),
+        mode: "extractive" as const,
+        ai_failed: true,
+        ai_error: shortAiError(e),
+      };
+    } else {
+      throw e;
     }
-    throw e;
   }
 
   if (answer.unknown) {
@@ -350,6 +364,8 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
       citations: [],
       mode,
       unknown: true,
+      ai_failed: answer.ai_failed,
+      ai_error: answer.ai_error,
     });
     return c.json({
       unknown: true,
@@ -357,6 +373,8 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
       citations: [],
       mode,
       ai_configured: Boolean(chat),
+      ai_failed: answer.ai_failed || undefined,
+      ai_error: answer.ai_error,
       ...persisted,
     });
   }
@@ -368,16 +386,21 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
     ? `${answer.answer_markdown}\n\n---\n${attached}`
     : answer.answer_markdown;
   const mode = answer.mode ?? (chat ? "ai" : "extractive");
+  const aiFailed = Boolean(answer.ai_failed);
   const persisted = await persistTurn({
     answer_markdown: markdown,
     citations: answer.citations,
     mode,
+    ai_failed: aiFailed,
+    ai_error: answer.ai_error,
   });
   return c.json({
     answer_markdown: markdown,
     citations: answer.citations,
     mode,
     ai_configured: Boolean(chat),
+    ai_failed: aiFailed || undefined,
+    ai_error: aiFailed ? answer.ai_error : undefined,
     extra: Object.keys(extras).length ? extras : undefined,
     ...persisted,
   });

@@ -31,6 +31,8 @@ type AskOut = {
   unknown?: boolean;
   mode?: "ai" | "extractive";
   ai_configured?: boolean;
+  ai_failed?: boolean;
+  ai_error?: string;
   thread_id?: string;
 };
 
@@ -47,6 +49,8 @@ type ChatMessage = {
   content: string;
   citations?: Citation[] | null;
   mode?: string | null;
+  ai_failed?: boolean | null;
+  ai_error?: string | null;
   created_at: string;
 };
 
@@ -309,6 +313,8 @@ export default function AskPage() {
         content: res.answer_markdown,
         citations: res.citations ?? [],
         mode: res.mode ?? null,
+        ai_failed: Boolean(res.ai_failed),
+        ai_error: res.ai_error ?? null,
         created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, assistant]);
@@ -350,7 +356,7 @@ export default function AskPage() {
           </p>
         ) : (
           <p className="hub-hint-pill muted">
-            已配置 AI：提问将走 Chat Completions，失败时会给出明确错误（不再静默降级）。对话会保存在本空间。
+            已配置 AI：提问将走 Chat Completions；若大模型失败，会回退为检索摘录并标注「AI 失败」。对话会保存在本空间。
           </p>
         )}
       </header>
@@ -440,6 +446,7 @@ export default function AskPage() {
                 );
               }
               const cites = normalizeCitations(m.citations);
+              const aiFailed = Boolean(m.ai_failed);
               return (
                 <motion.div
                   key={m.id}
@@ -448,7 +455,11 @@ export default function AskPage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.26, ease: easeOutExpo }}
                 >
-                  {m.mode ? (
+                  {aiFailed ? (
+                    <p className="ask-ai-failed" role="status">
+                      {`AI 未能生成（${m.ai_error || "未知原因"}）. 以下为检索摘录。`}
+                    </p>
+                  ) : m.mode ? (
                     <p className="ask-mode-pill muted">
                       {m.mode === "ai"
                         ? "回答来自大模型（附引用）"

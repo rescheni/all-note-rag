@@ -17,7 +17,7 @@ export function setToken(token: string | null) {
   else localStorage.removeItem("hub_token");
 }
 
-const HTML_MSG = "服务返回了网页而不是数据，请稍后重试。";
+const HTML_MSG = "服务返回了网页而不是 JSON 数据（可能是网关超时或上游异常）。请稍后重试；问答若已检索到笔记，服务端会改为返回摘录而不是错误页。";
 
 function looksLikeHtml(text: string): boolean {
   const t = text.trim();

@@ -1,5 +1,5 @@
 "use client";
-import { FormEvent, useEffect, useId, useState } from "react";
+import { FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
@@ -30,6 +30,12 @@ type SimilarHit = {
   snippet: string;
   preview_url: string;
   score: number;
+};
+
+type HistoryItem = {
+  id: string;
+  query: string;
+  created_at: string;
 };
 
 function pathParent(path: string): string {
@@ -109,6 +115,7 @@ function HitCard({
 export default function SearchPage() {
   const reduced = useReducedMotion();
   const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
   const [space, setSpace] = useState<Space | null>(null);
   const [results, setResults] = useState<SourceHit[]>([]);
   const [similar, setSimilar] = useState<SimilarHit[]>([]);
@@ -116,6 +123,47 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [err, setErr] = useState("");
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+
+  const loadHistory = useCallback(async (spaceId: string) => {
+    try {
+      const out = await api<{ history?: HistoryItem[] }>(
+        `/v1/spaces/${spaceId}/search/history?limit=12`,
+      );
+      setHistory(out.history ?? []);
+    } catch {
+      /* history is optional UX */
+    }
+  }, []);
+
+  const runSearch = useCallback(
+    async (spaceId: string, q: string) => {
+      const trimmed = q.trim();
+      if (!trimmed) return;
+      setQuery(trimmed);
+      setErr("");
+      setLoading(true);
+      setDidSearch(false);
+      if (inputRef.current) inputRef.current.value = trimmed;
+      try {
+        const out = await api<{ results?: SourceHit[]; similar?: SimilarHit[] }>(
+          `/v1/spaces/${spaceId}/search?q=${encodeURIComponent(trimmed)}`,
+        );
+        setResults(out.results ?? []);
+        setSimilar(out.similar ?? []);
+        setDidSearch(true);
+        void loadHistory(spaceId);
+      } catch (er) {
+        setErr(er instanceof Error ? er.message : "搜索失败");
+        setResults([]);
+        setSimilar([]);
+        setDidSearch(true);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loadHistory],
+  );
 
   useEffect(() => {
     if (!getToken()) {
@@ -123,33 +171,18 @@ export default function SearchPage() {
       return;
     }
     loadSpaces()
-      .then(({ current }) => setSpace(current))
+      .then(({ current }) => {
+        setSpace(current);
+        if (current) void loadHistory(current.id);
+      })
       .catch((e) => setErr(e instanceof Error ? e.message : "加载失败"));
-  }, []);
+  }, [loadHistory]);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!space) return;
     const q = String(new FormData(e.currentTarget).get("q") ?? "").trim();
-    setQuery(q);
-    setErr("");
-    setLoading(true);
-    setDidSearch(false);
-    try {
-      const out = await api<{ results?: SourceHit[]; similar?: SimilarHit[] }>(
-        `/v1/spaces/${space.id}/search?q=${encodeURIComponent(q)}`,
-      );
-      setResults(out.results ?? []);
-      setSimilar(out.similar ?? []);
-      setDidSearch(true);
-    } catch (er) {
-      setErr(er instanceof Error ? er.message : "搜索失败");
-      setResults([]);
-      setSimilar([]);
-      setDidSearch(true);
-    } finally {
-      setLoading(false);
-    }
+    await runSearch(space.id, q);
   }
 
   const emptyBoth = didSearch && !loading && results.length === 0 && similar.length === 0;
@@ -178,6 +211,7 @@ export default function SearchPage() {
           <IconSearch />
         </span>
         <input
+          ref={inputRef}
           id={inputId}
           name="q"
           type="search"
@@ -190,6 +224,26 @@ export default function SearchPage() {
           {loading ? "搜索中…" : "搜索"}
         </SignatureButton>
       </form>
+
+      {history.length ? (
+        <div className="search-history" aria-label="最近搜索">
+          <span className="search-history-label muted">最近</span>
+          <ul className="search-history-list">
+            {history.map((h) => (
+              <li key={h.id}>
+                <button
+                  type="button"
+                  className="search-history-chip"
+                  disabled={!space || loading}
+                  onClick={() => space && void runSearch(space.id, h.query)}
+                >
+                  {h.query}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {err ? (
         <div className="hub-state hub-state-error" role="alert">

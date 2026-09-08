@@ -665,7 +665,10 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
         <form onSubmit={onSubmit} key={`feishu-${connection?.id ?? "new"}`}>
           <section className="form-section feishu-scan">
             <h2>用飞书扫码登录</h2>
-            <p className="hint">将打开飞书官方扫码页，扫完自动回到中枢。</p>
+            <p className="hint">
+              将打开飞书官方扫码页，扫完自动回到中枢。用户访问令牌大约 2
+              小时过期，需要刷新令牌（offline_access）才能自动续期；若提示「无法刷新」请重新扫码授权。
+            </p>
             {(secrets?.access_token || secrets?.user_access_token) && (
               <p className="ok-msg">已通过飞书扫码登录。再扫一次可重新授权。</p>
             )}

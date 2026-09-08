@@ -5,7 +5,6 @@ import {
   loadVectorChunksViaSql,
   composeExtractiveAnswer,
   composeAskAnswer,
-  ChatUpstreamError,
   UNKNOWN_ANSWER,
   embedTexts,
   cosine,
@@ -140,30 +139,22 @@ describe("composeAskAnswer", () => {
     expect(out.citations[0]?.source_block_id).toBe("sleep-para");
   });
 
-  it("throws ChatUpstreamError when chat fails (no silent extractive)", async () => {
+  it("falls back to extractive with ai_failed when chat fails", async () => {
     const r = await hybridRetrieve(SPACE, "睡眠", { chunks: corpus });
     const fakeFetch: typeof fetch = async () =>
       new Response(JSON.stringify({ error: { message: "insufficient credits", code: "insufficient_user_quota" } }), {
         status: 402,
       });
-    await expect(
-      composeAskAnswer("睡眠", r.hits, {
-        baseUrl: "https://example.test/v1",
-        apiKey: "sk-test",
-        fetch: fakeFetch,
-      }),
-    ).rejects.toBeInstanceOf(ChatUpstreamError);
-    try {
-      await composeAskAnswer("睡眠", r.hits, {
-        baseUrl: "https://example.test/v1",
-        apiKey: "sk-test",
-        fetch: fakeFetch,
-      });
-    } catch (e) {
-      expect(e).toBeInstanceOf(ChatUpstreamError);
-      expect((e as ChatUpstreamError).code).toBe("ai_quota_exceeded");
-      expect((e as ChatUpstreamError).message).toMatch(/额度|credits/i);
-    }
+    const out = await composeAskAnswer("睡眠", r.hits, {
+      baseUrl: "https://example.test/v1",
+      apiKey: "sk-test",
+      fetch: fakeFetch,
+    });
+    expect(out.mode).toBe("extractive");
+    expect(out.ai_failed).toBe(true);
+    expect(out.ai_error).toMatch(/额度/);
+    expect(out.answer_markdown).toContain("根据当前空间笔记");
+    expect(out.citations.length).toBeGreaterThan(0);
   });
 
   it("marks mode ai when chat succeeds", async () => {

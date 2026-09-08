@@ -27,11 +27,13 @@ import {
   previewUrl,
   SIMILAR_LIMIT,
 } from "@note-hub/retrieve";
+import { createHash } from "node:crypto";
 import { query } from "../db.ts";
 import { env } from "../env.ts";
 import { errors, jsonError } from "../errors.ts";
 import { loadMembership, requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
 import { getObjectBytes, getObjectText, putObject } from "../s3.ts";
+import { redis } from "../queue.ts";
 import { extractBlocks } from "@note-hub/normalize";
 
 type Vars = { user: AuthUser };
@@ -799,6 +801,60 @@ function withBudget<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   });
 }
 
+const SEARCH_CACHE_TTL_SEC = 90;
+
+function searchCacheKey(spaceId: string, q: string): string {
+  const h = createHash("sha256").update(q).digest("hex").slice(0, 40);
+  return `search:cache:v1:${spaceId}:${h}`;
+}
+
+async function recordSearchHistory(userId: string, spaceId: string, q: string): Promise<void> {
+  const trimmed = q.trim();
+  if (!trimmed) return;
+  try {
+    await query(
+      `INSERT INTO search_history (user_id, space_id, query) VALUES ($1, $2, $3)`,
+      [userId, spaceId, trimmed],
+    );
+    // Keep at most ~40 rows per user+space (trim older after insert).
+    await query(
+      `DELETE FROM search_history sh
+       WHERE sh.user_id = $1 AND sh.space_id = $2
+         AND sh.id NOT IN (
+           SELECT id FROM search_history
+           WHERE user_id = $1 AND space_id = $2
+           ORDER BY created_at DESC
+           LIMIT 40
+         )`,
+      [userId, spaceId],
+    );
+  } catch (e) {
+    console.error(JSON.stringify({ level: "error", message: "search history write failed", error: String(e) }));
+  }
+}
+
+noteRoutes.get("/spaces/:id/search/history", async (c) => {
+  const user = c.get("user");
+  const spaceId = c.req.param("id");
+  const gate = await requireRole(user.id, spaceId, "viewer");
+  const denied = roleDenied(c, gate);
+  if (denied) return denied;
+  const limitRaw = Number(c.req.query("limit") ?? "12");
+  const limit = Number.isFinite(limitRaw) ? Math.min(30, Math.max(1, Math.floor(limitRaw))) : 12;
+  const r = await query<{ id: string; query: string; created_at: string }>(
+    `SELECT DISTINCT ON (lower(query)) id, query, created_at
+     FROM search_history
+     WHERE user_id = $1 AND space_id = $2 AND length(trim(query)) > 0
+     ORDER BY lower(query), created_at DESC`,
+    [user.id, spaceId],
+  );
+  // Re-sort by recency across unique queries
+  const items = [...r.rows]
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, limit);
+  return c.json({ history: items });
+});
+
 noteRoutes.get("/spaces/:id/search", async (c) => {
   const user = c.get("user");
   const spaceId = c.req.param("id");
@@ -806,7 +862,26 @@ noteRoutes.get("/spaces/:id/search", async (c) => {
   const denied = roleDenied(c, gate);
   if (denied) return denied;
   const q = (c.req.query("q") ?? "").trim();
-  if (!q) return c.json({ query: q, results: [], similar: [] });
+  if (!q) return c.json({ query: q, results: [], similar: [], cached: false });
+
+  // Fire-and-forget history (do not block search)
+  void recordSearchHistory(user.id, spaceId, q);
+
+  const cacheKey = searchCacheKey(spaceId, q);
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached) as {
+        query: string;
+        results: unknown[];
+        similar: unknown[];
+      };
+      return c.json({ ...parsed, cached: true });
+    }
+  } catch (e) {
+    console.error(JSON.stringify({ level: "error", message: "search cache read failed", error: String(e) }));
+  }
+
   const like = "%" + q + "%";
   const tokens = toTsQueryTokens(q);
   const fts = tokens || "";
@@ -924,7 +999,13 @@ noteRoutes.get("/spaces/:id/search", async (c) => {
   } catch (e) {
     console.error(JSON.stringify({ level: "error", message: "embed query failed", error: String(e) }));
   }
-  return c.json({ query: q, results: sourceHits, similar });
+  const payload = { query: q, results: sourceHits, similar };
+  try {
+    await redis.set(cacheKey, JSON.stringify(payload), "EX", SEARCH_CACHE_TTL_SEC);
+  } catch (e) {
+    console.error(JSON.stringify({ level: "error", message: "search cache write failed", error: String(e) }));
+  }
+  return c.json({ ...payload, cached: false });
 });
 
 noteRoutes.get("/notes/:id/similar", async (c) => {

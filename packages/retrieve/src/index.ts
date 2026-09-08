@@ -20,6 +20,7 @@ export {
   composeAskAnswer,
   citationsFromHits,
   ChatUpstreamError,
+  shortAiError,
   type AskCitation,
   type AskResponse,
   type ChatConfig,
