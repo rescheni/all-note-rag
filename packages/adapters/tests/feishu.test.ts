@@ -397,7 +397,13 @@ describe("feishu user oauth token", () => {
         expect(body.grant_type).toBe("refresh_token");
         expect(body.refresh_token).toBe("rt-1");
         return new Response(
-          JSON.stringify({ code: 0, access_token: "u-rotated", refresh_token: "rt-2" }),
+          JSON.stringify({
+            code: 0,
+            access_token: "u-rotated",
+            refresh_token: "rt-2",
+            expires_in: 7200,
+            refresh_token_expires_in: 2592000,
+          }),
           { status: 200 },
         );
       }
@@ -426,9 +432,100 @@ describe("feishu user oauth token", () => {
     expect(c.secrets?.access_token).toBe("u-rotated");
     expect(c.secrets?.user_access_token).toBe("u-rotated");
     expect(persisted[0]?.access_token).toBe("u-rotated");
+    expect(persisted[0]?.refresh_token).toBe("rt-2");
+    expect(typeof persisted[0]?.access_token_expires_at).toBe("string");
+    expect(typeof persisted[0]?.refresh_token_expires_at).toBe("string");
     expect(JSON.stringify(ok)).not.toContain("u-stale");
     expect(JSON.stringify(ok)).not.toContain("secret-app");
     expect(JSON.stringify(ok)).not.toContain("rt-1");
+  });
+
+  it("on 20064 reloads secrets and retries with rotated refresh_token", async () => {
+    let refreshCalls = 0;
+    const store: { secrets: Record<string, string> } = {
+      secrets: {
+        app_id: "cli_x",
+        app_secret: "secret-app",
+        access_token: "u-stale",
+        refresh_token: "rt-old",
+        access_token_expires_at: new Date(Date.now() - 60_000).toISOString(),
+      },
+    };
+    const fetchFn: typeof fetch = async (input, init) => {
+      const url = String(input);
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      if (url.includes("/authen/v2/oauth/token")) {
+        refreshCalls += 1;
+        const body = JSON.parse(String(init?.body ?? "{}")) as { refresh_token?: string };
+        if (body.refresh_token === "rt-old") {
+          // Simulate peer already consumed rt-old.
+          return new Response(JSON.stringify({ code: 20064, msg: "invalid_grant" }), { status: 400 });
+        }
+        if (body.refresh_token === "rt-peer") {
+          return new Response(
+            JSON.stringify({
+              code: 0,
+              access_token: "u-new",
+              refresh_token: "rt-new",
+              expires_in: 7200,
+              refresh_token_expires_in: 2592000,
+            }),
+            { status: 200 },
+          );
+        }
+        throw new Error(`unexpected rt ${body.refresh_token}`);
+      }
+      if (url.includes("/wiki/v2/spaces") && !url.includes("/nodes")) {
+        if (auth === "Bearer u-new") {
+          return new Response(JSON.stringify({ code: 0, data: { items: [], has_more: false } }), { status: 200 });
+        }
+        return new Response("unauthorized", { status: 401 });
+      }
+      throw new Error(`unexpected ${url}`);
+    };
+    const adapter = new FeishuAdapter(fetchFn);
+    const c = userCtx();
+    c.secrets = { ...store.secrets };
+    let reloads = 0;
+    c.reloadSecrets = async () => {
+      reloads += 1;
+      // First reload (lock enter): still old RT. After 20064, peer write is visible.
+      if (reloads >= 2) {
+        store.secrets = {
+          ...store.secrets,
+          access_token: "u-peer",
+          user_access_token: "u-peer",
+          refresh_token: "rt-peer",
+          access_token_expires_at: new Date(Date.now() - 1_000).toISOString(),
+        };
+      }
+      return { ...store.secrets };
+    };
+    c.persistSecrets = async (s) => {
+      store.secrets = { ...(s as Record<string, string>) };
+    };
+    const ok = await adapter.probe(c);
+    expect(ok.ok).toBe(true);
+    expect(refreshCalls).toBe(2);
+    expect(c.secrets?.access_token).toBe("u-new");
+    expect(c.secrets?.refresh_token).toBe("rt-new");
+  });
+
+  it("listChanges stays incremental when cursor preserved after re-auth tokens", async () => {
+    const adapter = new FeishuAdapter(mockFetch());
+    const c = ctx();
+    // Tenant path (no user token): cursor alone decides incremental vs full.
+    c.cursor = { doxcnAAA: "100", doxcnCCC: "200" };
+    const { changes, nextCursor } = await adapter.listChanges(c);
+    // mockFetch root nodes: AAA edit "100", CCC edit "200" — both unchanged → empty changes.
+    expect(changes).toEqual([]);
+    expect(nextCursor.doxcnAAA).toBe("100");
+    expect(nextCursor.doxcnCCC).toBe("200");
+
+    // Cleared cursor (as if re-auth wiped it) forces full upsert list.
+    c.cursor = null;
+    const full = await adapter.listChanges(c);
+    expect(full.changes.map((ch) => ch.source_id).sort()).toEqual(["doxcnAAA", "doxcnCCC"].sort());
   });
 });
 

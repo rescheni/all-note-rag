@@ -10,7 +10,7 @@ import {
   type ConnectionSecrets,
 } from "@note-hub/core";
 import { createAdapter } from "@note-hub/adapters";
-import { query, withTx } from "../db.ts";
+import { pool, query, withTx } from "../db.ts";
 import { env } from "../env.ts";
 import { errors, jsonError } from "../errors.ts";
 import { requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
@@ -395,6 +395,25 @@ connectionRoutes.post("/connections/:id/probe", async (c) => {
     connection: { ...conn, config: conn.config },
     secrets,
     cursor: conn.cursor,
+    reloadSecrets: async () => {
+      const live = await query("SELECT * FROM connections WHERE id = $1", [id]);
+      const row = live.rows[0];
+      if (!row) return null;
+      return decryptConnectionSecrets(row);
+    },
+    withSecretsLock: async (fn) => {
+      const client = await pool.connect();
+      try {
+        await client.query("SELECT pg_advisory_lock(87213405, hashtext($1::text))", [id]);
+        try {
+          return await fn();
+        } finally {
+          await client.query("SELECT pg_advisory_unlock(87213405, hashtext($1::text))", [id]);
+        }
+      } finally {
+        client.release();
+      }
+    },
     persistSecrets: async (next) => {
       const ref = await persistEncryptedSecrets(next);
       await query("UPDATE connections SET secrets_ref = $2, updated_at = now() WHERE id = $1", [id, ref]);

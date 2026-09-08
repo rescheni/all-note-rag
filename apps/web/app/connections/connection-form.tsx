@@ -666,11 +666,10 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
           <section className="form-section feishu-scan">
             <h2>用飞书扫码登录</h2>
             <p className="hint">
-              将打开飞书官方扫码页，扫完自动回到中枢。用户访问令牌大约 2
-              小时过期，需要刷新令牌（offline_access）才能自动续期；若提示「无法刷新」请重新扫码授权。
+              将打开飞书官方扫码页，扫完自动回到中枢。访问令牌约 2 小时过期，中枢会用刷新令牌（offline_access）自动续期；只有刷新令牌真正过期时才需要重新扫码。重新扫码会合并到当前连接，保留增量游标与已有笔记，不会全量重拉。
             </p>
             {(secrets?.access_token || secrets?.user_access_token) && (
-              <p className="ok-msg">已通过飞书扫码登录。再扫一次可重新授权。</p>
+              <p className="ok-msg">已通过飞书扫码登录。再扫一次可重新授权（增量同步）。</p>
             )}
             {oauthReady === false && (
               <p className="hint">还没配好飞书应用。可先在「高级」里填 App ID / Secret。</p>

@@ -409,9 +409,31 @@ oauthRoutes.get("/connections/oauth/feishu/callback", async (c) => {
 
   try {
     let connId = payload.cid ?? "";
+    // Re-scan without connection_id: if this space has exactly one Feishu connection,
+    // merge tokens onto it and keep cursor / notes (incremental sync after re-auth).
+    if (!connId) {
+      const sole = await query<{
+        id: string;
+        source: string;
+        space_id: string;
+        secrets_ref: string | null;
+        config: Record<string, unknown>;
+      }>(
+        `SELECT id, source, space_id, secrets_ref, config FROM connections
+         WHERE space_id = $1 AND source = 'feishu'
+         ORDER BY updated_at DESC`,
+        [payload.sid],
+      );
+      if (sole.rows.length === 1) {
+        connId = sole.rows[0].id;
+        connRow = sole.rows[0];
+        existingSecrets = await decryptConnectionSecrets(connRow);
+      }
+    }
     if (connId && connRow) {
       const merged = applyFeishuOAuthSecrets(existingSecrets, tokens, client);
       const secretsRef = await persistEncryptedSecrets(merged);
+      // Never clear cursor / last_sync_at — re-auth must stay incremental.
       await query(
         `UPDATE connections SET secrets_ref = $2, status = 'active', last_error = NULL, updated_at = now()
          WHERE id = $1`,

@@ -21,7 +21,7 @@ import { createAdapter, decodeObjectKey, mapConnectionObjectKey, mapPool, siyuan
 import { embedTexts, embeddingModelId, formatVector } from "@note-hub/retrieve";
 import { normalizeObsidianNote, normalizeSiyuanNote, normalizeNotionNote, normalizeFeishuNote, referencedAssetPaths } from "@note-hub/normalize";
 import { renderPreviewHtml } from "@note-hub/preview";
-import { query } from "./db.ts";
+import { pool, query } from "./db.ts";
 import { env } from "./env.ts";
 import { putHub } from "./s3.ts";
 import { assetHeadingPath, extractAssetText } from "./extract-asset.ts";
@@ -871,10 +871,31 @@ export async function runSync(connectionId: string, opts: RunSyncOpts = {}): Pro
 
     const secrets = await loadSecrets(conn);
     const adapter = createAdapter(conn.source);
+    const reloadConnectionSecrets = async (): Promise<ConnectionSecrets | null> => {
+      const row = await query("SELECT * FROM connections WHERE id = $1", [connectionId]);
+      const live = row.rows[0] as ConnectionRecord | undefined;
+      if (!live) return null;
+      return loadSecrets(live);
+    };
     const ctx = {
       connection: conn,
       secrets,
       cursor: conn.cursor,
+      reloadSecrets: reloadConnectionSecrets,
+      withSecretsLock: async <T,>(fn: () => Promise<T>): Promise<T> => {
+        const client = await pool.connect();
+        try {
+          // Namespace 87213405 = feishu/oauth secrets refresh.
+          await client.query("SELECT pg_advisory_lock(87213405, hashtext($1::text))", [connectionId]);
+          try {
+            return await fn();
+          } finally {
+            await client.query("SELECT pg_advisory_unlock(87213405, hashtext($1::text))", [connectionId]);
+          }
+        } finally {
+          client.release();
+        }
+      },
       persistSecrets: async (next: ConnectionSecrets) => {
         const blob = encryptSecret(JSON.stringify(next), env.hubSecret);
         const s = await query<{ id: string }>("INSERT INTO secrets (ciphertext) VALUES ($1) RETURNING id", [blob]);

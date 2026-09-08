@@ -82,6 +82,10 @@ export type ConnectionSecrets = {
   app_secret?: string;
   /** OAuth scope string returned by Feishu token exchange. */
   scope?: string;
+  /** ISO time when access_token / user_access_token expires (from expires_in). */
+  access_token_expires_at?: string;
+  /** ISO time when refresh_token expires (from refresh_token_expires_in). */
+  refresh_token_expires_at?: string;
   repo_password?: string;
 };
 
@@ -93,6 +97,10 @@ export type AdapterContext = {
   objectKey?: string;
   /** Persist rotated OAuth tokens; never log the payload. */
   persistSecrets?: (secrets: ConnectionSecrets) => Promise<void>;
+  /** Re-read secrets from storage (Feishu refresh_token is single-use). */
+  reloadSecrets?: () => Promise<ConnectionSecrets | null>;
+  /** Serialize refresh+persist across API/worker for one connection. */
+  withSecretsLock?: <T>(fn: () => Promise<T>) => Promise<T>;
 };
 
 export type ProbeResult = {

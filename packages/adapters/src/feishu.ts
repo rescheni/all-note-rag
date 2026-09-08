@@ -4,9 +4,13 @@ import { feishuBlocksToMarkdown, feishuMediaRefs } from "@note-hub/normalize";
 import { fetchWithRetry } from "./http.ts";
 import {
   applyFeishuOAuthSecrets,
+  feishuAccessTokenFresh,
   feishuOAuthClient,
+  feishuRefreshFailureMessage,
+  feishuRefreshTokenExpired,
   feishuUserAccessToken,
   refreshFeishuAccessToken,
+  FeishuTokenError,
 } from "./feishu-oauth.ts";
 
 export type { FeishuContactUser };
@@ -14,9 +18,13 @@ export {
   applyFeishuOAuthSecrets,
   buildFeishuAuthorizeUrl,
   exchangeFeishuAuthorizationCode,
+  feishuAccessTokenFresh,
   feishuOAuthClient,
+  feishuRefreshFailureMessage,
+  feishuRefreshTokenExpired,
   feishuUserAccessToken,
   refreshFeishuAccessToken,
+  FeishuTokenError,
   FEISHU_AUTHORIZE_URL,
   FEISHU_OAUTH_SCOPES,
   FEISHU_OAUTH_TOKEN_URL,
@@ -26,7 +34,10 @@ const FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access
 const FEISHU_API = "https://open.feishu.cn/open-apis";
 
 /** Shown when user_access_token expired and refresh_token is missing or refresh fails. */
-const FEISHU_USER_TOKEN_EXPIRED_MSG = "用户令牌已过期且无法刷新，请重新扫码（需刷新令牌 / offline_access）";
+const FEISHU_USER_TOKEN_EXPIRED_MSG =
+  "用户令牌已过期且无法刷新，请重新扫码（需刷新令牌 / offline_access；已有笔记与增量游标会保留）";
+const FEISHU_REFRESH_MISSING_MSG =
+  "缺少飞书刷新令牌，请重新扫码并确认授权 offline_access（已有笔记与增量游标会保留）";
 const SKIP_TYPES = new Set(["sheet", "bitable", "mindnote", "slides", "folder"]);
 const USER_TOKEN_AUTH_CODES = new Set([99991661, 99991663, 99991664, 99991668, 99991677]);
 /** Skip absurd media so one huge video can never blow up a note ingest. */
@@ -45,7 +56,7 @@ function asDict(v: unknown): Record<string, unknown> | null {
 export class FeishuAdapter implements Adapter {
   private lastUserRefreshError: string | undefined;
   private tenantToken: string | null = null;
-  private userRefreshed = false;
+  private refreshInFlight: Promise<string | undefined> | null = null;
   private noteMeta = new Map<string, { title: string; path: string; objType: string }>();
 
   constructor(private readonly fetchFn: typeof fetch = fetch) {}
@@ -87,44 +98,114 @@ export class FeishuAdapter implements Adapter {
     return token;
   }
 
-  /** Prefer user_access_token / access_token; else tenant_access_token. */
+  /** Prefer a fresh user_access_token; else tenant_access_token. */
   private async getBearer(ctx: AdapterContext): Promise<string | null> {
-    const user = feishuUserAccessToken(ctx.secrets);
-    if (user) return user;
-    return this.fetchTenantToken(ctx);
+    return this.ensureUserBearer(ctx);
   }
 
-  private async refreshUserIfPossible(ctx: AdapterContext): Promise<string | undefined> {
-    if (this.userRefreshed) return undefined;
-    this.userRefreshed = true;
-    const refreshToken = ctx.secrets?.refresh_token?.trim();
-    const client = feishuOAuthClient(ctx.secrets);
-    if (!refreshToken || !client) {
-      this.lastUserRefreshError = FEISHU_USER_TOKEN_EXPIRED_MSG;
-      return undefined;
-    }
-    try {
-      const tokens = await refreshFeishuAccessToken({
-        refreshToken,
-        clientId: client.clientId,
-        clientSecret: client.clientSecret,
-        fetchFn: this.fetchFn,
-      });
-      const next = applyFeishuOAuthSecrets(ctx.secrets, tokens);
-      ctx.secrets = next;
-      this.lastUserRefreshError = undefined;
-      if (ctx.persistSecrets) {
+  /**
+   * Refresh user_access_token when missing/stale.
+   * Feishu refresh_token is single-use: serialize via withSecretsLock, re-read on 20064,
+   * and always persist the rotated refresh_token.
+   */
+  private async refreshUserIfPossible(ctx: AdapterContext, force = false): Promise<string | undefined> {
+    if (this.refreshInFlight) return this.refreshInFlight;
+    this.refreshInFlight = this.runUserRefresh(ctx, force).finally(() => {
+      this.refreshInFlight = null;
+    });
+    return this.refreshInFlight;
+  }
+
+  private async runUserRefresh(ctx: AdapterContext, force: boolean): Promise<string | undefined> {
+    const run = async (): Promise<string | undefined> => {
+      const accessBefore = feishuUserAccessToken(ctx.secrets);
+      if (ctx.reloadSecrets) {
         try {
-          await ctx.persistSecrets(next);
+          const latest = await ctx.reloadSecrets();
+          if (latest) ctx.secrets = latest;
         } catch {
-          /* keep using in-memory token even if persist fails */
+          /* keep in-memory secrets */
         }
       }
-      return tokens.access_token;
-    } catch {
-      this.lastUserRefreshError = FEISHU_USER_TOKEN_EXPIRED_MSG;
-      return undefined;
-    }
+
+      const accessNow = feishuUserAccessToken(ctx.secrets);
+      const fresh = feishuAccessTokenFresh(ctx.secrets);
+      // Reuse when still fresh, or when a peer already rotated the access_token under the lock.
+      if (accessNow && fresh && (!force || accessNow !== accessBefore)) {
+        this.lastUserRefreshError = undefined;
+        return accessNow;
+      }
+
+      const refreshToken = ctx.secrets?.refresh_token?.trim() ?? "";
+      const client = feishuOAuthClient(ctx.secrets);
+      if (!refreshToken || !client) {
+        this.lastUserRefreshError = refreshToken ? FEISHU_USER_TOKEN_EXPIRED_MSG : FEISHU_REFRESH_MISSING_MSG;
+        return undefined;
+      }
+      if (feishuRefreshTokenExpired(ctx.secrets)) {
+        this.lastUserRefreshError = "飞书刷新令牌已过期，请重新扫码登录（已有笔记与增量游标会保留）";
+        return undefined;
+      }
+
+      const attempt = async (rt: string) =>
+        refreshFeishuAccessToken({
+          refreshToken: rt,
+          clientId: client.clientId,
+          clientSecret: client.clientSecret,
+          fetchFn: this.fetchFn,
+        });
+
+      try {
+        let tokens;
+        try {
+          tokens = await attempt(refreshToken);
+        } catch (err) {
+          // Another worker may have rotated the single-use refresh_token — reload and retry once.
+          const code = err instanceof FeishuTokenError ? err.code : 0;
+          if ((code === 20064 || code === 20073 || code === 20026) && ctx.reloadSecrets) {
+            const latest = await ctx.reloadSecrets();
+            if (latest) ctx.secrets = latest;
+            const again = ctx.secrets?.refresh_token?.trim() ?? "";
+            if (again && again !== refreshToken) {
+              tokens = await attempt(again);
+            } else {
+              throw err;
+            }
+          } else {
+            throw err;
+          }
+        }
+        const next = applyFeishuOAuthSecrets(ctx.secrets, tokens);
+        ctx.secrets = next;
+        this.lastUserRefreshError = undefined;
+        if (ctx.persistSecrets) {
+          try {
+            await ctx.persistSecrets(next);
+          } catch {
+            /* keep using in-memory token even if persist fails */
+          }
+        }
+        return tokens.access_token;
+      } catch (err) {
+        this.lastUserRefreshError = feishuRefreshFailureMessage(err);
+        return undefined;
+      }
+    };
+
+    if (ctx.withSecretsLock) return ctx.withSecretsLock(run);
+    return run();
+  }
+
+  /** Prefer a fresh user token; refresh proactively when expiry is known. */
+  private async ensureUserBearer(ctx: AdapterContext): Promise<string | null> {
+    const user = feishuUserAccessToken(ctx.secrets);
+    if (!user) return this.fetchTenantToken(ctx);
+    if (feishuAccessTokenFresh(ctx.secrets)) return user;
+    // Legacy secrets without expires_at: use token until API 401 forces refresh.
+    if (!ctx.secrets?.access_token_expires_at) return user;
+    const refreshed = await this.refreshUserIfPossible(ctx, true);
+    if (refreshed) return refreshed;
+    return null;
   }
 
   private async requestAuthed(ctx: AdapterContext, url: string, init: RequestInit = {}): Promise<Response> {
@@ -133,7 +214,7 @@ export class FeishuAdapter implements Adapter {
     const headers = { authorization: `Bearer ${token}`, ...(init.headers as Record<string, string> | undefined) };
     const res = await this.request(url, { ...init, headers });
     if (res.status !== 401) return res;
-    const next = await this.refreshUserIfPossible(ctx);
+    const next = await this.refreshUserIfPossible(ctx, true);
     if (!next) return res;
     return this.request(url, {
       ...init,
@@ -158,7 +239,7 @@ export class FeishuAdapter implements Adapter {
     if (!token) return { res: new Response("{}", { status: 401 }), json: {} };
     let out = await doOne(token);
     if (this.isTokenAuthError(out.res, out.json)) {
-      const next = await this.refreshUserIfPossible(ctx);
+      const next = await this.refreshUserIfPossible(ctx, true);
       if (next) out = await doOne(next);
     }
     return out;

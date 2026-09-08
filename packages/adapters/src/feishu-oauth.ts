@@ -17,6 +17,9 @@ export const FEISHU_OAUTH_SCOPES = [
   "offline_access",
 ].join(" ");
 
+/** Refresh skew: refresh access_token this many ms before expiry. */
+export const FEISHU_ACCESS_SKEW_MS = 120_000;
+
 export function feishuUserAccessToken(secrets: ConnectionSecrets | null | undefined): string | undefined {
   const user = typeof secrets?.user_access_token === "string" ? secrets.user_access_token.trim() : "";
   if (user) return user;
@@ -75,6 +78,15 @@ export type FeishuTokenResult = {
   scope?: string;
 };
 
+export class FeishuTokenError extends Error {
+  readonly code: number;
+  constructor(message: string, code = 0) {
+    super(message);
+    this.name = "FeishuTokenError";
+    this.code = code;
+  }
+}
+
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
@@ -106,11 +118,13 @@ async function feishuTokenRequest(
   } catch {
     json = {};
   }
-  if (!res.ok || Number(json.code ?? 0) !== 0) {
-    throw new Error("飞书换票失败");
+  const code = Number(json.code ?? (res.ok ? 0 : res.status));
+  if (!res.ok || code !== 0) {
+    const msg = String(json.msg ?? json.message ?? json.error_description ?? json.error ?? "飞书换票失败");
+    throw new FeishuTokenError(`飞书换票失败 (${code || res.status}): ${msg}`, code || res.status);
   }
   const parsed = readTokenResult(json);
-  if (!parsed) throw new Error("飞书换票失败 (无 access_token)");
+  if (!parsed) throw new FeishuTokenError("飞书换票失败 (无 access_token)", code);
   return parsed;
 }
 
@@ -144,6 +158,10 @@ export async function refreshFeishuAccessToken(opts: {
   });
 }
 
+function isoAfterSeconds(seconds: number, nowMs = Date.now()): string {
+  return new Date(nowMs + Math.max(0, seconds) * 1000).toISOString();
+}
+
 /** Merge user OAuth tokens into connection secrets. Keeps app_id / app_secret. */
 export function applyFeishuOAuthSecrets(
   existing: ConnectionSecrets | null | undefined,
@@ -153,9 +171,57 @@ export function applyFeishuOAuthSecrets(
   const next: ConnectionSecrets = { ...(existing ?? {}) };
   next.access_token = tokens.access_token;
   next.user_access_token = tokens.access_token;
+  // Feishu refresh_token is single-use: always prefer the rotated value when present.
   if (tokens.refresh_token) next.refresh_token = tokens.refresh_token;
   if (tokens.scope) next.scope = tokens.scope;
+  if (typeof tokens.expires_in === "number" && Number.isFinite(tokens.expires_in)) {
+    next.access_token_expires_at = isoAfterSeconds(tokens.expires_in);
+  }
+  if (
+    tokens.refresh_token &&
+    typeof tokens.refresh_token_expires_in === "number" &&
+    Number.isFinite(tokens.refresh_token_expires_in)
+  ) {
+    next.refresh_token_expires_at = isoAfterSeconds(tokens.refresh_token_expires_in);
+  }
   if (client?.clientId && !next.app_id) next.app_id = client.clientId;
   if (client?.clientSecret && !next.app_secret) next.app_secret = client.clientSecret;
   return next;
+}
+
+/** True when we know access_token is still usable (with skew). Unknown expiry → false. */
+export function feishuAccessTokenFresh(
+  secrets: ConnectionSecrets | null | undefined,
+  skewMs = FEISHU_ACCESS_SKEW_MS,
+): boolean {
+  if (!feishuUserAccessToken(secrets)) return false;
+  const raw = secrets?.access_token_expires_at;
+  if (typeof raw !== "string" || !raw.trim()) return false;
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return false;
+  return t - skewMs > Date.now();
+}
+
+/** True when refresh_token_expires_at is present and already past. */
+export function feishuRefreshTokenExpired(secrets: ConnectionSecrets | null | undefined): boolean {
+  const raw = secrets?.refresh_token_expires_at;
+  if (typeof raw !== "string" || !raw.trim()) return false;
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return false;
+  return t <= Date.now();
+}
+
+export function feishuRefreshFailureMessage(err: unknown): string {
+  const code = err instanceof FeishuTokenError ? err.code : 0;
+  // 20037: refresh_token expired; 20026 invalid; 20064 revoked / already used.
+  if (code === 20037) {
+    return "飞书刷新令牌已过期，请重新扫码登录（已有笔记与增量游标会保留）";
+  }
+  if (code === 20064 || code === 20073) {
+    return "飞书刷新令牌已失效，请重新扫码登录（已有笔记与增量游标会保留）";
+  }
+  if (code === 20026) {
+    return "飞书刷新令牌无效，请重新扫码登录（已有笔记与增量游标会保留）";
+  }
+  return "用户令牌已过期且无法刷新，请重新扫码（需刷新令牌 / offline_access；已有笔记与增量游标会保留）";
 }

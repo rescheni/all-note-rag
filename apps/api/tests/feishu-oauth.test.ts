@@ -378,4 +378,127 @@ describe("feishu oauth", () => {
     expect(cb.setCookie).toContain("Secure");
     assertNoSecretLeak(cb.location);
   });
+
+  it("re-auth on existing connection preserves cursor and merges tokens", async () => {
+    process.env.FEISHU_APP_ID = APP_ID;
+    process.env.FEISHU_APP_SECRET = APP_SECRET;
+    const cursor = { doxKeep: "42", __meta: { doxKeep: { title: "Keep", path: "Keep", obj_type: "docx" } } };
+    const blob = encryptSecret(
+      JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET, access_token: "old-at", refresh_token: "old-rt" }),
+      env.hubSecret,
+    );
+    const sec = await pool.query<{ id: string }>("INSERT INTO secrets (ciphertext) VALUES ($1) RETURNING id", [blob]);
+    const conn = await pool.query<{ id: string }>(
+      `INSERT INTO connections (space_id, source, name, config, secrets_ref, status, cursor, last_sync_at)
+       VALUES ($1, 'feishu', '保留游标', '{}'::jsonb, $2, 'error', $3::jsonb, now()) RETURNING id`,
+      [spaceId, sec.rows[0].id, JSON.stringify(cursor)],
+    );
+    const connId = conn.rows[0].id;
+    const started = await get(
+      `/v1/connections/oauth/feishu/authorize?space_id=${spaceId}&connection_id=${connId}&name=${encodeURIComponent("保留游标")}`,
+      token,
+    );
+    expect(started.status).toBe(200);
+    const state = new URL(String(started.body.url)).searchParams.get("state") ?? "";
+    const NEW_AT = `fs-at-re-${suffix}`;
+    const NEW_RT = `fs-rt-re-${suffix}`;
+    globalThis.fetch = (async (_input, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { grant_type?: string };
+      expect(body.grant_type).toBe("authorization_code");
+      return new Response(
+        JSON.stringify({
+          code: 0,
+          access_token: NEW_AT,
+          refresh_token: NEW_RT,
+          expires_in: 7200,
+          refresh_token_expires_in: 2592000,
+          scope: "offline_access wiki:wiki:readonly",
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const cb = await get(`/v1/connections/oauth/feishu/callback?code=reauth-code&state=${encodeURIComponent(state)}`);
+    expect(cb.status).toBe(302);
+    expect(cb.location).toContain(`/connections/${connId}`);
+    expect(cb.location).toContain("oauth=ok");
+
+    const row = await pool.query<{
+      status: string;
+      last_error: string | null;
+      cursor: Record<string, unknown>;
+      ciphertext: string;
+      last_sync_at: string | null;
+    }>(
+      `SELECT c.status, c.last_error, c.cursor, c.last_sync_at, s.ciphertext
+       FROM connections c JOIN secrets s ON s.id::text = c.secrets_ref
+       WHERE c.id = $1::uuid`,
+      [connId],
+    );
+    expect(row.rows[0].status).toBe("active");
+    expect(row.rows[0].last_error).toBeNull();
+    expect(row.rows[0].last_sync_at).toBeTruthy();
+    expect(row.rows[0].cursor).toEqual(cursor);
+    const secrets = JSON.parse(decryptSecret(row.rows[0].ciphertext, env.hubSecret)) as Record<string, string>;
+    expect(secrets.access_token).toBe(NEW_AT);
+    expect(secrets.refresh_token).toBe(NEW_RT);
+    expect(secrets.access_token_expires_at).toBeTruthy();
+    expect(secrets.refresh_token_expires_at).toBeTruthy();
+    expect(JSON.stringify(row.rows[0])).not.toContain(NEW_AT);
+  });
+
+  it("callback without connection_id merges onto the sole feishu connection", async () => {
+    process.env.FEISHU_APP_ID = APP_ID;
+    process.env.FEISHU_APP_SECRET = APP_SECRET;
+    // Wipe other feishu rows in this space so exactly one remains.
+    await pool.query(`DELETE FROM connections WHERE space_id = $1 AND source = 'feishu'`, [spaceId]);
+    const cursor = { onlyDoc: "7" };
+    const blob = encryptSecret(
+      JSON.stringify({ app_id: APP_ID, app_secret: APP_SECRET, access_token: "sole-old", refresh_token: "sole-rt" }),
+      env.hubSecret,
+    );
+    const sec = await pool.query<{ id: string }>("INSERT INTO secrets (ciphertext) VALUES ($1) RETURNING id", [blob]);
+    const conn = await pool.query<{ id: string }>(
+      `INSERT INTO connections (space_id, source, name, config, secrets_ref, status, cursor)
+       VALUES ($1, 'feishu', '唯一飞书', '{}'::jsonb, $2, 'error', $3::jsonb) RETURNING id`,
+      [spaceId, sec.rows[0].id, JSON.stringify(cursor)],
+    );
+    const connId = conn.rows[0].id;
+
+    const started = await get(
+      `/v1/connections/oauth/feishu/authorize?space_id=${spaceId}&name=${encodeURIComponent("唯一飞书")}`,
+      token,
+    );
+    expect(started.status).toBe(200);
+    const state = new URL(String(started.body.url)).searchParams.get("state") ?? "";
+    const payload = verifyOAuthState(state, env.hubSecret);
+    expect(payload?.cid).toBeFalsy();
+
+    const NEW_AT = `fs-at-sole-${suffix}`;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ code: 0, access_token: NEW_AT, refresh_token: `fs-rt-sole-${suffix}`, expires_in: 7200 }),
+        { status: 200 },
+      )) as typeof fetch;
+
+    const cb = await get(`/v1/connections/oauth/feishu/callback?code=sole-code&state=${encodeURIComponent(state)}`);
+    expect(cb.status).toBe(302);
+    expect(cb.location).toContain(`/connections/${connId}`);
+
+    const count = await pool.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM connections WHERE space_id = $1 AND source = 'feishu'`,
+      [spaceId],
+    );
+    expect(count.rows[0].n).toBe("1");
+    const row = await pool.query<{ cursor: Record<string, unknown>; status: string; ciphertext: string }>(
+      `SELECT c.cursor, c.status, s.ciphertext
+       FROM connections c JOIN secrets s ON s.id::text = c.secrets_ref WHERE c.id = $1::uuid`,
+      [connId],
+    );
+    expect(row.rows[0].status).toBe("active");
+    expect(row.rows[0].cursor).toEqual(cursor);
+    const secrets = JSON.parse(decryptSecret(row.rows[0].ciphertext, env.hubSecret)) as Record<string, string>;
+    expect(secrets.access_token).toBe(NEW_AT);
+  });
+
 });
