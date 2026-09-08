@@ -64,13 +64,21 @@ function ModelCombo({
   allowCustom?: boolean;
   extraOptions?: { id: string; label: string }[];
 }) {
-  const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
+  const trimmed = value.trim();
+  const needle = trimmed.toLowerCase();
+  const exactMatch =
+    options.some((m) => m.id === trimmed) ||
+    (extraOptions?.some((ex) => ex.id === trimmed) ?? false);
+  // Exact match → show full list so user can pick another; otherwise filter as they type.
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    const base = options.filter((m) => !needle || m.id.toLowerCase().includes(needle));
+    const active = exactMatch ? "" : needle;
+    const base = options.filter((m) => !active || m.id.toLowerCase().includes(active));
     return base.slice(0, 80);
-  }, [options, q]);
+  }, [options, needle, exactMatch]);
+  const showCustom = allowCustom && !!trimmed && !exactMatch;
+  const showMenu =
+    open && (filtered.length > 0 || (extraOptions && extraOptions.length > 0) || showCustom);
 
   return (
     <div className="field model-combo">
@@ -82,25 +90,17 @@ function ModelCombo({
         autoComplete="off"
         placeholder={placeholder}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+        }}
         onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 160)}
+        onBlur={() => setTimeout(() => setOpen(false), 180)}
         aria-autocomplete="list"
         aria-expanded={open}
       />
-      {open && (filtered.length > 0 || (extraOptions && extraOptions.length) || allowCustom) ? (
+      {showMenu ? (
         <div className="model-combo-menu" role="listbox">
-          {options.length > 6 ? (
-            <div className="model-combo-filter is-top">
-              <input
-                type="search"
-                placeholder="筛选模型…"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                onMouseDown={(e) => e.stopPropagation()}
-              />
-            </div>
-          ) : null}
           {extraOptions?.map((ex) => (
             <button
               key={ex.id}
@@ -109,7 +109,6 @@ function ModelCombo({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 onChange(ex.id);
-                setQ("");
                 setOpen(false);
               }}
             >
@@ -125,7 +124,6 @@ function ModelCombo({
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 onChange(m.id);
-                setQ("");
                 setOpen(false);
               }}
             >
@@ -133,17 +131,17 @@ function ModelCombo({
               {m.owned_by ? <em>{m.owned_by}</em> : null}
             </button>
           ))}
-          {allowCustom && q.trim() && !filtered.some((m) => m.id === q.trim()) ? (
+          {showCustom ? (
             <button
               type="button"
-              className="model-combo-item"
+              className="model-combo-item is-active"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
-                onChange(q.trim());
+                onChange(value.trim());
                 setOpen(false);
               }}
             >
-              <span>使用自定义：{q.trim()}</span>
+              <span>使用自定义：{value.trim()}</span>
             </button>
           ) : null}
         </div>
@@ -226,7 +224,10 @@ export default function SettingsPage() {
     setErr("");
     setOk("");
     setBusy(true);
-    const fd = new FormData(e.currentTarget);
+    // Capture the form node before any await — React nulls e.currentTarget after the
+    // event handler yields, which previously crashed on keyInput.querySelector.
+    const form = e.currentTarget;
+    const fd = new FormData(form);
     const apiKey = String(fd.get("api_key") ?? "");
     const body: Record<string, string> = {
       base_url: String(fd.get("base_url") ?? "").trim(),
@@ -244,7 +245,7 @@ export default function SettingsPage() {
       setEmbedModel(out.embedding_model ?? "");
       setBaseUrlDraft(out.base_url ?? "");
       setOk("已保存。无需重启。");
-      const keyInput = e.currentTarget.querySelector('input[name="api_key"]') as HTMLInputElement | null;
+      const keyInput = form.querySelector('input[name="api_key"]') as HTMLInputElement | null;
       if (keyInput) keyInput.value = "";
       if (out.configured) {
         await refreshModels();
