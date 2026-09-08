@@ -1,22 +1,44 @@
 import { toFtsTokens } from "@note-hub/core";
+import {
+  DEFAULT_LOCAL_EMBED_MODEL,
+  embedTextsLocal,
+  isLocalCatalogModel,
+} from "./local-embed.ts";
 
 export const EMBEDDING_DIM = 1536;
 export const LOCAL_EMBEDDING_MODEL = "local-hash-ngram-1536";
 export const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
 
+export type EmbedProvider = "api" | "local";
+
 export type EmbedEndpoint = {
   baseUrl?: string;
   apiKey?: string;
   model?: string;
+  /** api = OpenAI-compatible /embeddings; local = ONNX via @xenova/transformers */
+  provider?: EmbedProvider;
 };
 
 export function embeddingModelId(opts?: EmbedEndpoint): string {
+  const provider = resolveProvider(opts);
+  if (provider === "local") {
+    return opts?.model?.trim() || process.env.EMBEDDING_MODEL?.trim() || DEFAULT_LOCAL_EMBED_MODEL;
+  }
   const base = opts?.baseUrl?.trim() || process.env.OPENAI_BASE_URL?.trim();
   const key = opts?.apiKey?.trim() || process.env.OPENAI_API_KEY?.trim();
   if (base && key) {
     return opts?.model?.trim() || process.env.EMBEDDING_MODEL?.trim() || DEFAULT_EMBEDDING_MODEL;
   }
   return LOCAL_EMBEDDING_MODEL;
+}
+
+function resolveProvider(opts?: EmbedEndpoint): EmbedProvider {
+  if (opts?.provider === "local" || opts?.provider === "api") return opts.provider;
+  const envP = process.env.EMBED_PROVIDER?.trim().toLowerCase();
+  if (envP === "local" || envP === "api") return envP;
+  const model = opts?.model?.trim() || process.env.EMBEDDING_MODEL?.trim() || "";
+  if (isLocalCatalogModel(model) && model !== LOCAL_EMBEDDING_MODEL) return "local";
+  return "api";
 }
 
 function fnv1a32(str: string): number {
@@ -120,7 +142,7 @@ export function parseEmbedding(raw: unknown): number[] | undefined {
 
 export type EmbedTextsOpts = EmbedEndpoint & {
   fetch?: typeof fetch;
-  /** Force the local projector (tests; never hits network). */
+  /** Force the local hashed projector (tests; never hits network). */
   local?: boolean;
 };
 
@@ -130,6 +152,13 @@ function resolvedEndpoint(opts?: EmbedTextsOpts): { base: string; apiKey: string
   if (!base || !apiKey) return null;
   const model = opts?.model?.trim() || process.env.EMBEDDING_MODEL?.trim() || DEFAULT_EMBEDDING_MODEL;
   return { base, apiKey, model };
+}
+
+function padOrTrim(emb: number[]): number[] {
+  if (emb.length === EMBEDDING_DIM) return emb;
+  if (emb.length > EMBEDDING_DIM) return emb.slice(0, EMBEDDING_DIM);
+  if (!emb.length) return emb;
+  return emb.concat(new Array(EMBEDDING_DIM - emb.length).fill(0));
 }
 
 async function embedOpenAI(texts: string[], opts?: EmbedTextsOpts): Promise<number[][]> {
@@ -154,9 +183,7 @@ async function embedOpenAI(texts: string[], opts?: EmbedTextsOpts): Promise<numb
   for (const row of rows) {
     const idx = row.index ?? 0;
     const emb = row.embedding ?? [];
-    if (emb.length === EMBEDDING_DIM) out[idx] = emb;
-    else if (emb.length > EMBEDDING_DIM) out[idx] = emb.slice(0, EMBEDDING_DIM);
-    else if (emb.length) out[idx] = emb.concat(new Array(EMBEDDING_DIM - emb.length).fill(0));
+    out[idx] = padOrTrim(emb);
   }
   for (let i = 0; i < out.length; i++) {
     if (!out[i]?.length) out[i] = localProject(texts[i] ?? "");
@@ -166,7 +193,19 @@ async function embedOpenAI(texts: string[], opts?: EmbedTextsOpts): Promise<numb
 
 export async function embedTexts(texts: string[], opts?: EmbedTextsOpts): Promise<number[][]> {
   if (!texts.length) return [];
-  const useOpenAI = !opts?.local && Boolean(resolvedEndpoint(opts));
+  if (opts?.local) {
+    return texts.map(localProject);
+  }
+
+  const provider = resolveProvider(opts);
+  if (provider === "local") {
+    const model =
+      opts?.model?.trim() || process.env.EMBEDDING_MODEL?.trim() || DEFAULT_LOCAL_EMBED_MODEL;
+    // Explicit local provider: never silently fall back to hash.
+    return embedTextsLocal(texts, model);
+  }
+
+  const useOpenAI = Boolean(resolvedEndpoint(opts));
   if (useOpenAI) {
     try {
       return await embedOpenAI(texts, opts);
@@ -176,3 +215,16 @@ export async function embedTexts(texts: string[], opts?: EmbedTextsOpts): Promis
   }
   return texts.map(localProject);
 }
+
+export {
+  LOCAL_EMBED_CATALOG,
+  DEFAULT_LOCAL_EMBED_MODEL,
+  listLocalEmbedModels,
+  downloadLocalEmbedModel,
+  isLocalModelDownloaded,
+  isLocalCatalogModel,
+  embedModelDir,
+  getDownloadProgress,
+  type LocalEmbedCatalogEntry,
+  type LocalEmbedModelStatus,
+} from "./local-embed.ts";

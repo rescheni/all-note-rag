@@ -388,7 +388,12 @@ async function writeEmbeddings(rows: { id: string; text: string }[], noteId?: st
   if (!rows.length) return;
   try {
     const ai = await loadAiSettings(query, env.hubSecret);
-    const endpoint = { baseUrl: ai.base_url, apiKey: ai.api_key, model: ai.embedding_model };
+    const endpoint = {
+      baseUrl: ai.base_url,
+      apiKey: ai.api_key,
+      model: ai.embedding_model,
+      provider: ai.embed_provider,
+    };
     const vectors = await embedTexts(rows.map((c) => c.text), endpoint);
     const model = embeddingModelId(endpoint);
     for (let i = 0; i < rows.length; i++) {

@@ -20,6 +20,7 @@ x-app-env: &app-env
   FEISHU_APP_ID: ${FEISHU_APP_ID:-}
   FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
   FEISHU_REDIRECT_URI: ${FEISHU_REDIRECT_URI:-http://127.0.0.1:3000/v1/connections/oauth/feishu/callback}
+  EMBED_MODEL_DIR: /data/models
 
 services:
   postgres:
@@ -102,6 +103,8 @@ services:
       - .env.example
     environment:
       <<: *app-env
+    volumes:
+      - embed-models:/data/models
     ports:
       - "3001:3001"
     depends_on:
@@ -132,6 +135,8 @@ services:
       - .env.example
     environment:
       <<: *app-env
+    volumes:
+      - embed-models:/data/models
     depends_on:
       postgres:
         condition: service_healthy
@@ -167,3 +172,4 @@ services:
 volumes:
   pgdata:
   miniodata:
+  embed-models:

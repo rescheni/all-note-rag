@@ -3,6 +3,8 @@
 
 ## Unreleased
 
+- **本地嵌入模型**：设置页可选「上游 API / 本地模型」；目录下载 Xenova ONNX（默认 BGE 中文小模型），进度与「设为默认」；API `GET/POST .../local-embed-models`；ask/search/worker 走 `@xenova/transformers`；`embed_provider` 字段与 `EMBED_MODEL_DIR`。
+
 - **Operate 首页重设计**：个人空间标题+pill、去掉空间切换/新建团队残留；同步文案收短；空/加载态；导航「首页」；API 禁用 POST /spaces 建团队。
 - **同步更安静**：API 自动 tick 从 30 秒改为约 1 小时，且仅当 `last_sync_at` 过期才入队；手动同步与 S3 变更唤醒不变。
 - **个人笔记**：主导航与首页去掉「成员」/团队空间创建；ACL 文案改为仅自己；子账号改到账号页。

@@ -96,6 +96,7 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
         baseUrl: ai.base_url,
         apiKey: ai.api_key,
         model: ai.embedding_model,
+        provider: ai.embed_provider,
       });
       queryEmbedding = emb;
     } catch (e) {

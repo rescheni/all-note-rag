@@ -19,7 +19,7 @@
 - **账号**：注册登录、个人空间 **子账号**（账号页）、长效 **API Token**（`hub_…`）
 - **Agent 调用**：登录 JWT / `hub_` Token / HTTP Basic（邮箱+密码）
 - **MCP**：`/v1/mcp`（Bearer `hub_`），供 Cursor 等外部 AI 只读检索；见 [docs/MCP.md](docs/MCP.md)
-- **设置**（导航「设置」）：AI 端点、主题、氛围；配置 OpenAI 兼容 Base URL / Key，「刷新模型列表」从上游拉取可选模型
+- **设置**（导航「设置」）：AI 端点、主题、氛围；Chat 走上游；**嵌入**可选上游 API 或本地下载 ONNX 模型（默认推荐 BGE 中文小模型）
 - **文档可见性**：私人笔记默认仅自己可见
 - **OCR / Docker**：Worker 镜像含 tesseract（chi_sim + eng）、poppler、antiword；图片与 pdf/docx 可进检索
 
@@ -40,9 +40,14 @@
 | API Token | 账号页创建 `hub_…`，Bearer 调用 `/v1` |
 | Agent | JWT、`hub_`、Basic 三种鉴权 |
 | MCP | `/v1/mcp` + `hub_` 令牌；search_notes / get_note 等 |
-| AI | 设置里刷新模型列表并选择 chat / embedding 模型 |
+| AI | Chat 选上游模型；嵌入可选上游 API 或本地下载 ONNX（设置页下载 / 设为默认） |
 | 文档可见性 | 私人笔记 · 仅自己 |
 | OCR / Docker | Compose 一键；宿主机无二进制时 tesseract.js fallback |
+
+
+### 本地嵌入模型
+
+设置 → AI → **本地模型**：下载 `@xenova/transformers` ONNX 嵌入（默认 `Xenova/bge-small-zh-v1.5`），无需 Ollama / 宿主机 apt。模型目录由 `EMBED_MODEL_DIR`（默认 `data/models`，Compose 挂载 `/data/models`）共享给 API 与 Worker。更换本地模型后需重新同步以重建向量（库内仍存 1536 维，较小模型会零填充）。
 
 ### Notion：分享范围
 

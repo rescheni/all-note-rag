@@ -36,8 +36,19 @@ export {
   EMBEDDING_DIM,
   LOCAL_EMBEDDING_MODEL,
   DEFAULT_EMBEDDING_MODEL,
+  LOCAL_EMBED_CATALOG,
+  DEFAULT_LOCAL_EMBED_MODEL,
+  listLocalEmbedModels,
+  downloadLocalEmbedModel,
+  isLocalModelDownloaded,
+  isLocalCatalogModel,
+  embedModelDir,
+  getDownloadProgress,
   type EmbedTextsOpts,
   type EmbedEndpoint,
+  type EmbedProvider,
+  type LocalEmbedCatalogEntry,
+  type LocalEmbedModelStatus,
 } from "./embed.ts";
 
 export {

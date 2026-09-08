@@ -817,6 +817,7 @@ noteRoutes.get("/spaces/:id/search", async (c) => {
       baseUrl: ai.base_url,
       apiKey: ai.api_key,
       model: ai.embedding_model,
+      provider: ai.embed_provider,
     });
     if (!emb?.length) return [] as Awaited<ReturnType<typeof similarNotesInSpace>>;
     // exclude filled after keyword query; placeholder until then

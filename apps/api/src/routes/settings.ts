@@ -9,7 +9,13 @@ import {
   saveAmbientSettings,
   saveThemeSettings,
   themePatchFrom,
+  type EmbedProvider,
 } from "@note-hub/core";
+import {
+  downloadLocalEmbedModel,
+  embedModelDir,
+  listLocalEmbedModels,
+} from "@note-hub/retrieve";
 import { query } from "../db.ts";
 import { env } from "../env.ts";
 import { jsonError } from "../errors.ts";
@@ -100,18 +106,64 @@ settingsRoutes.get("/settings/ai/models", async (c) => {
   }
 });
 
+/** Catalog of downloadable local ONNX embed models + disk status. */
+settingsRoutes.get("/settings/ai/local-embed-models", async (c) => {
+  const models = listLocalEmbedModels();
+  return c.json({
+    models,
+    model_dir: embedModelDir(),
+    note: "更换本地模型后需重新同步以重建向量",
+  });
+});
+
+function decodeLocalModelId(raw: string): string {
+  const s = decodeURIComponent(raw || "").trim();
+  // UI may send Xenova--bge-small-zh-v1.5 to avoid path slashes
+  if (s.includes("--") && !s.includes("/")) return s.replace(/--/g, "/");
+  return s;
+}
+
+/** Download by JSON body { id } — preferred (ids contain slashes). */
+settingsRoutes.post("/settings/ai/local-embed-models/download", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { id?: unknown };
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  if (!id) return jsonError(c, 400, "invalid_request", "缺少模型 id");
+  try {
+    const status = await downloadLocalEmbedModel(id);
+    return c.json({ model: status, model_dir: embedModelDir() });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return jsonError(c, 400, "download_failed", msg.slice(0, 240) || "下载失败");
+  }
+});
+
+/** Download by path id (use Xenova--name). Matches design :id/download. */
+settingsRoutes.post("/settings/ai/local-embed-models/:id/download", async (c) => {
+  const id = decodeLocalModelId(c.req.param("id") || "");
+  if (!id) return jsonError(c, 400, "invalid_request", "缺少模型 id");
+  try {
+    const status = await downloadLocalEmbedModel(id);
+    return c.json({ model: status, model_dir: embedModelDir() });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return jsonError(c, 400, "download_failed", msg.slice(0, 240) || "下载失败");
+  }
+});
+
 settingsRoutes.patch("/settings/ai", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as {
     base_url?: unknown;
     api_key?: unknown;
     embedding_model?: unknown;
     chat_model?: unknown;
+    embed_provider?: unknown;
   };
   const patch: {
     base_url?: string;
     api_key?: string;
     embedding_model?: string;
     chat_model?: string;
+    embed_provider?: EmbedProvider;
   } = {};
   if (typeof body.base_url === "string") {
     const u = body.base_url.trim();
@@ -123,6 +175,9 @@ settingsRoutes.patch("/settings/ai", async (c) => {
   if (typeof body.api_key === "string") patch.api_key = body.api_key;
   if (typeof body.embedding_model === "string") patch.embedding_model = body.embedding_model;
   if (typeof body.chat_model === "string") patch.chat_model = body.chat_model;
+  if (body.embed_provider === "api" || body.embed_provider === "local") {
+    patch.embed_provider = body.embed_provider;
+  }
   const saved = await saveAiSettings(query, env.hubSecret, patch);
   return c.json(publicAiSettings(saved));
 });
@@ -156,4 +211,3 @@ settingsRoutes.patch("/settings/theme", async (c) => {
   }
   return c.json(await saveThemeSettings(query, user.id, patch));
 });
-

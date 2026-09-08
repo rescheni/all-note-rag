@@ -187,11 +187,13 @@ describe("tree / activity / settings", () => {
         api_key: SECRET_KEY,
         embedding_model: "text-embedding-3-small",
         chat_model: "gpt-4o-mini",
+        embed_provider: "api",
       },
       token,
     );
     expect(saved.status).toBe(200);
     expect(saved.body.configured).toBe(true);
+    expect(saved.body.embed_provider).toBe("api");
     expect(saved.body.base_url).toBe("https://api.openai.com/v1");
     expect(saved.raw).not.toContain(SECRET_KEY);
     expect(saved.body.api_key).toBeUndefined();
@@ -203,8 +205,31 @@ describe("tree / activity / settings", () => {
     expect(got.body.base_url).toBe("https://api.openai.com/v1");
     expect(got.body.embedding_model).toBe("text-embedding-3-small");
     expect(got.body.chat_model).toBe("gpt-4o-mini");
+    expect(got.body.embed_provider).toBe("api");
     expect(got.body.api_key).toBeUndefined();
     expect(got.raw).not.toContain(SECRET_KEY);
     expect(JSON.stringify(got.body)).not.toMatch(/api_key|sk-/i);
   });
+
+  it("lists and can select local embed provider", async () => {
+    const listed = await get("/v1/settings/ai/local-embed-models", token);
+    expect(listed.status).toBe(200);
+    expect(Array.isArray(listed.body.models)).toBe(true);
+    expect(listed.body.models.length).toBeGreaterThan(0);
+    expect(listed.body.model_dir).toBeTruthy();
+
+    const saved = await patch(
+      "/v1/settings/ai",
+      {
+        embed_provider: "local",
+        embedding_model: "Xenova/bge-small-zh-v1.5",
+      },
+      token,
+    );
+    expect(saved.status).toBe(200);
+    expect(saved.body.embed_provider).toBe("local");
+    expect(saved.body.embedding_model).toBe("Xenova/bge-small-zh-v1.5");
+    expect(saved.body.api_key).toBeUndefined();
+  });
+
 });
