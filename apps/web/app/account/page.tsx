@@ -205,9 +205,51 @@ export default function AccountPage() {
       )}
 
       <div className="card form-card" style={{ marginTop: "1.25rem" }}>
+        <h2>MCP（给外部 AI）</h2>
+        <p className="hint">
+          用上方创建的 <code>hub_</code> 令牌，把中枢接到 Cursor / Claude 等外部 Agent。只读工具：
+          <code>search_notes</code>、<code>get_note</code>、<code>list_connections</code>、<code>list_spaces</code>。
+        </p>
+        <ol className="hint" style={{ paddingLeft: "1.2rem", lineHeight: 1.7 }}>
+          <li>创建令牌并复制明文（仅一次）。</li>
+          <li>
+            MCP URL：<code>https://notes.rei0.cn/v1/mcp</code>（本机可用{" "}
+            <code>http://127.0.0.1:3001/v1/mcp</code>）。
+          </li>
+          <li>
+            请求头：<code>Authorization: Bearer hub_…</code>
+          </li>
+        </ol>
+        <pre
+          className="hint"
+          style={{
+            whiteSpace: "pre-wrap",
+            background: "var(--desk)",
+            padding: "0.75rem 0.9rem",
+            borderRadius: "var(--radius)",
+            border: "1px solid var(--line)",
+            fontSize: "0.8rem",
+          }}
+        >{`// ~/.cursor/mcp.json 示例
+{
+  "mcpServers": {
+    "note-hub": {
+      "url": "https://notes.rei0.cn/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer hub_你的令牌"
+      }
+    }
+  }
+}`}</pre>
+        <p className="hint">
+          完整说明见仓库 <code>docs/MCP.md</code>。写作仍在思源 / Notion / 飞书 / Obsidian；中枢只读。
+        </p>
+      </div>
+
+      <div className="card form-card" style={{ marginTop: "1.25rem" }}>
         <h2>Agent 调用说明</h2>
         <p className="hint">
-          Base URL 可用相对路径 <code>/v1</code>，或公网 <code>https://notes.rei0.cn/v1</code>。
+          Base URL 可用相对路径 <code>/v1</code>，或公网 <code>https://notes.rei0.cn/v1</code>。也可用上方 MCP。
         </p>
         <ol className="hint" style={{ paddingLeft: "1.2rem", lineHeight: 1.7 }}>
           <li>

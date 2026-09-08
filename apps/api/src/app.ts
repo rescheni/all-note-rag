@@ -11,6 +11,7 @@ import { skillRoutes } from "./routes/skills.ts";
 import { hookRoutes } from "./routes/hooks.ts";
 import { oauthRoutes } from "./routes/oauth.ts";
 import { settingsRoutes } from "./routes/settings.ts";
+import { mcpRoutes } from "./routes/mcp.ts";
 import { jsonError } from "./errors.ts";
 
 export const app = new Hono();
@@ -48,6 +49,7 @@ v1.route("/", askRoutes);
 v1.route("/", growthRoutes);
 v1.route("/", skillRoutes);
 v1.route("/", settingsRoutes);
+v1.route("/", mcpRoutes);
 app.route("/v1", v1);
 
 app.notFound((c) => jsonError(c, 404, "not_found", "未找到"));

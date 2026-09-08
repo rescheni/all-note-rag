@@ -29,6 +29,8 @@ type AskOut = {
   answer_markdown: string;
   citations: Citation[];
   unknown?: boolean;
+  mode?: "ai" | "extractive";
+  ai_configured?: boolean;
 };
 
 function shelfHref(c: Citation): string | null {
@@ -113,7 +115,7 @@ export default function AskPage() {
       <header className="hub-page-head">
         <h1>问答</h1>
         <p className="readonly-banner">
-          中枢只读。回答来自当前空间已同步的笔记，不会写回任何源。
+          写作仍在思源 / Notion / 飞书 / Obsidian；中枢只读聚合与问答。回答来自已同步笔记，不会写回任何源。
         </p>
         {space ? (
           <p className="hub-space-chip">
@@ -124,10 +126,12 @@ export default function AskPage() {
         ) : null}
         {!aiReady ? (
           <p className="hub-hint-pill">
-            未配置 AI 端点，问答使用本地抽取。
+            未配置 AI 端点：问答仅本地抽取，不会调用大模型。
             <Link href="/settings">去设置</Link>
           </p>
-        ) : null}
+        ) : (
+          <p className="hub-hint-pill muted">已配置 AI：提问将走 Chat Completions，失败时会给出明确错误（不再静默降级）。</p>
+        )}
       </header>
 
       <form className="ask-prompt-shell" onSubmit={onSubmit}>
@@ -189,6 +193,12 @@ export default function AskPage() {
           {asked ? (
             <p className="ask-asked muted">
               问 · <span>{asked}</span>
+            </p>
+          ) : null}
+
+          {out.mode ? (
+            <p className="ask-mode-pill muted">
+              {out.mode === "ai" ? "回答来自大模型（附引用）" : "回答为本地抽取（未走大模型）"}
             </p>
           ) : null}
 

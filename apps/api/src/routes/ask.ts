@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import {
+  ChatUpstreamError,
   composeAskAnswer,
+  composeExtractiveAnswer,
   embedTexts,
   hybridRetrieve,
   loadChunksViaSql,
@@ -15,7 +17,7 @@ import {
 import { loadAiSettings } from "@note-hub/core";
 import { query } from "../db.ts";
 import { env } from "../env.ts";
-import { errors } from "../errors.ts";
+import { jsonError } from "../errors.ts";
 import { requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
 
 type Vars = { user: AuthUser };
@@ -24,13 +26,6 @@ askRoutes.use("*", requireUser);
 
 const loadChunks = loadChunksViaSql((text, params) => query(text, params));
 const loadVectorChunks = loadVectorChunksViaSql((text, params) => query(text, params));
-
-
-async function chatConfig() {
-  const ai = await loadAiSettings(query, env.hubSecret);
-  if (!ai.configured) return undefined;
-  return { baseUrl: ai.base_url, apiKey: ai.api_key, model: ai.chat_model };
-}
 
 async function growthOnAsk(spaceId: string, userId: string, q: string): Promise<string | undefined> {
   try {
@@ -89,10 +84,14 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
     ? body.note_ids.filter((id): id is string => typeof id === "string")
     : undefined;
 
+  const ai = await loadAiSettings(query, env.hubSecret);
+  const chat = ai.configured
+    ? { baseUrl: ai.base_url, apiKey: ai.api_key, model: ai.chat_model }
+    : undefined;
+
   let queryEmbedding: number[] | undefined;
   if (q.trim()) {
     try {
-      const ai = await loadAiSettings(query, env.hubSecret);
       const [emb] = await embedTexts([q], {
         baseUrl: ai.base_url,
         apiKey: ai.api_key,
@@ -116,11 +115,45 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
     writingHealthOnAsk(spaceId, user.id, q),
   ]);
   if (retrieved.unknown) {
-    return c.json({ unknown: true, answer_markdown: UNKNOWN_ANSWER, citations: [] });
+    return c.json({
+      unknown: true,
+      answer_markdown: UNKNOWN_ANSWER,
+      citations: [],
+      mode: chat ? "ai" : "extractive",
+      ai_configured: Boolean(chat),
+    });
   }
-  const answer = await composeAskAnswer(q, retrieved.hits, await chatConfig());
+
+  let answer;
+  try {
+    answer = chat
+      ? await composeAskAnswer(q, retrieved.hits, chat)
+      : composeExtractiveAnswer(q, retrieved.hits);
+  } catch (e) {
+    if (e instanceof ChatUpstreamError) {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          message: "ask chat upstream failed",
+          code: e.code,
+          error: e.message,
+          status: e.status,
+        }),
+      );
+      const status = e.status === 401 || e.status === 403 ? 400 : 502;
+      return jsonError(c, status as 400 | 502, e.code, e.message);
+    }
+    throw e;
+  }
+
   if (answer.unknown) {
-    return c.json({ unknown: true, answer_markdown: UNKNOWN_ANSWER, citations: [] });
+    return c.json({
+      unknown: true,
+      answer_markdown: UNKNOWN_ANSWER,
+      citations: [],
+      mode: answer.mode ?? (chat ? "ai" : "extractive"),
+      ai_configured: Boolean(chat),
+    });
   }
   const extras: Record<string, string> = {};
   if (growthSummary) extras.growth = growthSummary;
@@ -132,6 +165,8 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
   return c.json({
     answer_markdown: markdown,
     citations: answer.citations,
+    mode: answer.mode ?? (chat ? "ai" : "extractive"),
+    ai_configured: Boolean(chat),
     extra: Object.keys(extras).length ? extras : undefined,
   });
 });

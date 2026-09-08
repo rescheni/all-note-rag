@@ -1,5 +1,5 @@
 /* 笔记中枢 — light offline shell. Do not cache /v1 or note bodies (privacy). */
-const SHELL = "note-hub-shell-v1";
+const SHELL = "note-hub-shell-v2";
 const PRECACHE = [
   "/",
   "/manifest.webmanifest",

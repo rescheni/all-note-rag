@@ -262,9 +262,9 @@ export default function SettingsPage() {
   return (
     <>
       <h1>设置</h1>
-      <p className="readonly-banner">AI 端点与界面偏好。</p>
+      <p className="readonly-banner">AI 端点用于<strong>问答</strong>与向量。写作仍在思源 / Notion / 飞书 / Obsidian；中枢只读聚合与问答。</p>
       <h2>AI 端点</h2>
-      <p className="hint">接入 OpenAI 兼容的 Base URL 与 API Key，用于问答与向量。密钥只写不读。</p>
+      <p className="hint">接入 OpenAI 兼容的 Base URL 与 API Key。保存后，问答页会调用 Chat Completions；未配置则仅本地抽取。密钥只写不读。</p>
       {err && <p className="err">{err}</p>}
       {ok && <p className="ok-msg">{ok}</p>}
       <form className="card form-card" onSubmit={onSubmit}>

@@ -4,18 +4,21 @@
 
 中文界面。预览只读本地缓存 / S3 规范对象，不在预览路径上打源站实时 API。
 
+主导航：首页 / 笔记 / 搜索 / 问答 / 成长 / 接入 / 设置。**会议、写作、Skills 已从主导航下线**（路由仍保留说明页）。写作仍在思源 / Notion / 飞书 / Obsidian。
+
 ## 产品一览
 
 - **四源接入**：思源、Notion、飞书、Obsidian（Obsidian 可用，非优先推荐）
 - **同步**：手动「同步」+ 对象存储变更唤醒；自动巡检约每小时（仅当距上次同步已超过约 1 小时）
 - **书架 + 树 + 预览**：连接像书立在书架上；点开后是文件夹树与笔记预览
-- **搜索与问答**：关键词 / 路径 / FTS + 向量近邻；Ask 带来源卡片，可跳到预览块锚点
+- **搜索与问答**：关键词 / 路径 / FTS + 向量近邻；**问答**在配置 AI 后走 Chat Completions（未配置则本地抽取）；带来源卡片
 - **双链 / 块引用**：Wiki 链、思源块引用、Notion / 飞书页面提及等会解析成站内链接与反向链接
 - **主题**：抹茶纸色（默认）、墨夜、素白
 - **PWA**：可安装到桌面 / 主屏（manifest + Service Worker）
 - **热力图**：首页写作活动（字数 / 块 / 篇）
 - **账号**：注册登录、个人空间 **子账号**（账号页）、长效 **API Token**（`hub_…`）
 - **Agent 调用**：登录 JWT / `hub_` Token / HTTP Basic（邮箱+密码）
+- **MCP**：`/v1/mcp`（Bearer `hub_`），供 Cursor 等外部 AI 只读检索；见 [docs/MCP.md](docs/MCP.md)
 - **设置**（导航「设置」）：AI 端点、主题、氛围；配置 OpenAI 兼容 Base URL / Key，「刷新模型列表」从上游拉取可选模型
 - **文档可见性**：私人笔记默认仅自己可见
 - **OCR / Docker**：Worker 镜像含 tesseract（chi_sim + eng）、poppler、antiword；图片与 pdf/docx 可进检索
@@ -36,6 +39,7 @@
 | 账号 / 子账号 | 个人空间可在账号页创建子账号；无团队成员协作 |
 | API Token | 账号页创建 `hub_…`，Bearer 调用 `/v1` |
 | Agent | JWT、`hub_`、Basic 三种鉴权 |
+| MCP | `/v1/mcp` + `hub_` 令牌；search_notes / get_note 等 |
 | AI | 设置里刷新模型列表并选择 chat / embedding 模型 |
 | 文档可见性 | 私人笔记 · 仅自己 |
 | OCR / Docker | Compose 一键；宿主机无二进制时 tesseract.js fallback |

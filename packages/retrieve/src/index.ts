@@ -19,6 +19,7 @@ export {
   composeExtractiveAnswer,
   composeAskAnswer,
   citationsFromHits,
+  ChatUpstreamError,
   type AskCitation,
   type AskResponse,
   type ChatConfig,

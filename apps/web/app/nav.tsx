@@ -11,13 +11,10 @@ import {
   IconGrowth,
   IconLogin,
   IconLogout,
-  IconMeetings,
   IconMenu,
   IconNotes,
   IconSearch,
-  IconSkills,
   IconSpace,
-  IconWriting,
   IconSettings,
 } from "./icons";
 
@@ -194,15 +191,6 @@ export function Nav() {
               <div className="nav-gap" />
               <NavLink href="/growth" icon={<IconGrowth />} onNavigate={closeMenu}>
                 成长
-              </NavLink>
-              <NavLink href="/meetings" icon={<IconMeetings />} onNavigate={closeMenu}>
-                会议
-              </NavLink>
-              <NavLink href="/writing-health" icon={<IconWriting />} onNavigate={closeMenu}>
-                写作
-              </NavLink>
-              <NavLink href="/skills" icon={<IconSkills />} onNavigate={closeMenu}>
-                Skills
               </NavLink>
               <div className="nav-gap" />
               <NavLink href="/connections" icon={<IconConnect />} onNavigate={closeMenu}>

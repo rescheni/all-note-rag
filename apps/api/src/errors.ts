@@ -2,7 +2,7 @@ import type { Context } from "hono";
 
 export function jsonError(
   c: Context,
-  status: 400 | 401 | 403 | 404 | 409 | 500,
+  status: 400 | 401 | 403 | 404 | 409 | 500 | 502,
   code: string,
   message: string,
 ) {
