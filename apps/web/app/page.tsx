@@ -1,12 +1,10 @@
 "use client";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { api, getToken } from "@/lib/api";
-import { loadSpaces, spaceKindLabel, storeSpaceId, type Space } from "@/lib/space";
-import { MembersPanel } from "./members-panel";
+import { loadSpaces, storeSpaceId, type Space } from "@/lib/space";
 import { isRunInProgress, type SyncRunProgress } from "./sync-progress";
 import { Heatmap, type HeatDay, type HeatYear } from "./heatmap";
-import { SignatureButton } from "./ui-motion";
 import { prettyPath, shortPath } from "./notes/crumbs";
 import { HomeConnShelf } from "./home-conn-shelf";
 
@@ -31,8 +29,6 @@ export default function HomePage() {
   const [space, setSpace] = useState<Space | null>(null);
   const [conns, setConns] = useState<Conn[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
-  const [newName, setNewName] = useState("");
-  const [creating, setCreating] = useState(false);
   const [pollUntil, setPollUntil] = useState(0);
   const [activity, setActivity] = useState<HeatDay[]>([]);
   const [activityYears, setActivityYears] = useState<HeatYear[]>([]);
@@ -132,31 +128,6 @@ export default function HomePage() {
     }
   }
 
-  async function onCreateTeam(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setErr("");
-    setCreating(true);
-    try {
-      const created = await api<{ space: { id: string; name: string; kind: string }; role: string }>(
-        "/v1/spaces",
-        { method: "POST", body: JSON.stringify({ name: newName.trim(), kind: "team" }) },
-      );
-      setNewName("");
-      const sp: Space = {
-        id: created.space.id,
-        name: created.space.name,
-        kind: created.space.kind,
-        role: created.role,
-      };
-      const next = [...spaces, sp];
-      setSpaces(next);
-      await loadFor(sp);
-    } catch (er) {
-      setErr(er instanceof Error ? er.message : "创建失败");
-    } finally {
-      setCreating(false);
-    }
-  }
 
   async function triggerSync(id: string) {
     setErr("");
@@ -182,54 +153,30 @@ export default function HomePage() {
       <p className="readonly-banner">中枢只读，不写回任何源。</p>
       {err && <p className="err">{err}</p>}
 
-      <div className="space-bar">
-        <div>
-          <label htmlFor="space-switch">当前空间</label>
-          <select
-            id="space-switch"
-            value={space?.id ?? ""}
-            onChange={(e) => onSwitch(e.target.value)}
-          >
-            {spaces.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}（{spaceKindLabel(s.kind)}）
-              </option>
-            ))}
-          </select>
-        </div>
-        <form className="grow" onSubmit={onCreateTeam}>
-          <label htmlFor="team-name">新建团队空间</label>
-          <div className="search-bar">
-            <input
-              id="team-name"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              name="name"
-              type="text"
-              required
-              placeholder="团队名称"
-            />
-            <SignatureButton type="submit" disabled={creating || !newName.trim()}>
-              {creating ? "创建中…" : "创建"}
-            </SignatureButton>
+      {spaces.length > 1 && (
+        <div className="space-bar">
+          <div>
+            <label htmlFor="space-switch">当前空间</label>
+            <select
+              id="space-switch"
+              value={space?.id ?? ""}
+              onChange={(e) => onSwitch(e.target.value)}
+            >
+              {spaces.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
           </div>
-        </form>
-      </div>
-
-      {space?.kind === "team" && (
-        <>
-          <p>
-            <Link href={`/spaces/${space.id}/members`}>打开成员页</Link>
-          </p>
-          <MembersPanel spaceId={space.id} role={space.role} />
-        </>
+        </div>
       )}
 
       <Heatmap days={activity} years={activityYears} />
 
       {/* Role / auth-dependent siblings only after mount — same tags on SSR & first paint. */}
       {mounted && !canManageConn && space ? (
-        <p className="muted">你是只读成员，可以浏览笔记、搜索与问答，但不能管理连接或同步。</p>
+        <p className="muted">当前账号为只读，可以浏览笔记、搜索与问答，但不能管理连接或同步。</p>
       ) : null}
       <section className="home-conns">
         <div className="home-conns-head">
@@ -251,6 +198,9 @@ export default function HomePage() {
             ) : null}
           </p>
         )}
+        <p className="muted" style={{ marginTop: 0 }}>
+          同步方式：手动「同步」+ 对象存储变更唤醒；自动巡检约每小时一次（仅当距上次同步已超过约 1 小时）。
+        </p>
         <HomeConnShelf conns={conns} canSync={Boolean(mounted && canManageConn)} onSync={triggerSync} />
       </section>
 

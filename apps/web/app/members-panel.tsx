@@ -135,7 +135,7 @@ export function MembersPanel({
 
   return (
     <div className="card">
-      <h2>成员</h2>
+      <h2>{isPersonal ? "子账号" : "成员"}</h2>
       {err && <p className="err">{err}</p>}
       {ok && <p className="ok-msg">{ok}</p>}
       <ul className="list">

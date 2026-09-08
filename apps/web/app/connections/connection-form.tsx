@@ -793,7 +793,7 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
               </div>
             </details>
           </section>
-          {editing && connId && (
+          {false && editing && connId && (
             <section className="form-section">
               <h2>通讯录</h2>
               <p className="hint">

@@ -187,6 +187,9 @@ export default function ConnectionsPage() {
       <p className="hub-lede">
         中枢只读，不写回任何源。同一个源可以接入多个连接（Notion、思源、Obsidian、飞书都一样），删除只清掉中枢这一侧的副本。
       </p>
+      <p className="muted">
+        同步方式：手动「立即同步」+ 对象存储变更唤醒；自动巡检约每小时一次（距上次同步超过约 1 小时才跑）。
+      </p>
 
       {space && (
         <p className="muted">
@@ -218,7 +221,7 @@ export default function ConnectionsPage() {
       )}
 
       {!canManage && space && (
-        <p className="muted">你是只读成员，可以查看来源，但不能新增、改名或删除。</p>
+        <p className="muted">当前账号为只读，可以查看来源，但不能新增、改名或删除。</p>
       )}
 
       {loaded && conns.length === 0 && (

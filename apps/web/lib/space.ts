@@ -31,7 +31,8 @@ export async function loadSpaces(): Promise<{ spaces: Space[]; current: Space | 
 }
 
 export function spaceKindLabel(kind: string): string {
-  return kind === "team" ? "团队" : "个人";
+  // Product is personal-only in UI; keep label gentle if legacy team rows remain.
+  return kind === "team" ? "空间" : "个人";
 }
 
 export function roleLabel(role: string): string {

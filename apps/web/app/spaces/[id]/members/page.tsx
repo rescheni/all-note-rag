@@ -1,48 +1,25 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { api, getToken } from "@/lib/api";
-import { spaceKindLabel, storeSpaceId } from "@/lib/space";
-import { MembersPanel } from "../../../members-panel";
+import { getToken } from "@/lib/api";
 
+/** Team/members UX removed — personal notes only. Sub-accounts live on /account. */
 export default function SpaceMembersPage() {
-  const params = useParams<{ id: string }>();
-  const [err, setErr] = useState("");
-  const [space, setSpace] = useState<{ id: string; name: string; kind: string } | null>(null);
-  const [role, setRole] = useState("viewer");
-
   useEffect(() => {
     if (!getToken()) {
       location.href = "/login";
       return;
     }
-    const id = params.id;
-    (async () => {
-      try {
-        const r = await api<{ space: { id: string; name: string; kind: string }; role: string }>(
-          `/v1/spaces/${id}`,
-        );
-        setSpace(r.space);
-        setRole(r.role);
-        storeSpaceId(r.space.id);
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : "加载失败");
-      }
-    })();
-  }, [params.id]);
+    location.replace("/account");
+  }, []);
 
   return (
     <>
-      <h1>{space ? `${space.name} · 成员` : "成员"}</h1>
-      <p className="readonly-banner">中枢只读，不写回任何源。</p>
-      {space && (
-        <p className="muted">
-          {spaceKindLabel(space.kind)}空间 · <Link href="/">返回空间</Link>
-        </p>
-      )}
-      {err && <p className="err">{err}</p>}
-      {space && <MembersPanel spaceId={space.id} role={role} spaceKind={space.kind} />}
+      <h1>成员</h1>
+      <p className="muted">
+        笔记中枢现为个人只读笔记中枢，不再提供团队成员协作。子账号与 API 令牌请前往{" "}
+        <Link href="/account">账号</Link>。
+      </p>
     </>
   );
 }

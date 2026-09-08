@@ -1,6 +1,8 @@
 "use client";
 import { FormEvent, useEffect, useState } from "react";
 import { api, getToken } from "@/lib/api";
+import { loadSpaces } from "@/lib/space";
+import { MembersPanel } from "../members-panel";
 
 type TokenRow = {
   id: string;
@@ -26,6 +28,7 @@ export default function AccountPage() {
   const [tokens, setTokens] = useState<TokenRow[]>([]);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [email, setEmail] = useState("");
+  const [personalSpace, setPersonalSpace] = useState<{ id: string; role: string } | null>(null);
 
   async function refreshTokens() {
     const r = await api<{ tokens: TokenRow[] }>("/v1/auth/tokens");
@@ -39,6 +42,12 @@ export default function AccountPage() {
     }
     api<{ user: { email: string } }>("/v1/me")
       .then((r) => setEmail(r.user.email))
+      .catch(() => undefined);
+    loadSpaces()
+      .then(({ spaces }) => {
+        const personal = spaces.find((s) => s.kind === "personal") ?? spaces[0];
+        if (personal) setPersonalSpace({ id: personal.id, role: personal.role });
+      })
       .catch(() => undefined);
     refreshTokens().catch((e) => setErr(e instanceof Error ? e.message : "加载令牌失败"));
   }, []);
@@ -188,6 +197,12 @@ export default function AccountPage() {
           </div>
         )}
       </div>
+
+      {personalSpace && (
+        <div style={{ marginTop: "1.25rem" }}>
+          <MembersPanel spaceId={personalSpace.id} role={personalSpace.role} spaceKind="personal" />
+        </div>
+      )}
 
       <div className="card form-card" style={{ marginTop: "1.25rem" }}>
         <h2>Agent 调用说明</h2>

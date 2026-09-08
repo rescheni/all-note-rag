@@ -13,7 +13,7 @@ const MATCHA_THEME = "#5e8a68";
 
 export const metadata: Metadata = {
   title: "笔记中枢",
-  description: "个人笔记与团队文档只读聚合层",
+  description: "个人只读笔记中枢，无团队协作",
   applicationName: "笔记中枢",
   manifest: "/manifest.webmanifest",
   appleWebApp: {

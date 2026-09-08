@@ -12,7 +12,6 @@ import {
   IconLogin,
   IconLogout,
   IconMeetings,
-  IconMembers,
   IconMenu,
   IconNotes,
   IconSearch,
@@ -209,11 +208,6 @@ export function Nav() {
               <NavLink href="/connections" icon={<IconConnect />} onNavigate={closeMenu}>
                 接入
               </NavLink>
-              {spaceId && (
-                <NavLink href={`/spaces/${spaceId}/members`} icon={<IconMembers />} onNavigate={closeMenu}>
-                  成员
-                </NavLink>
-              )}
               <div className="nav-foot">
                 <NavLink href="/settings" icon={<IconSettings />} onNavigate={closeMenu}>
                   设置
