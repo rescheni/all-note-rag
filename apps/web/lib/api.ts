@@ -31,16 +31,49 @@ export function friendlyErrorMessage(raw: unknown, fallback = "请求失败"): s
   const t = typeof raw === "string" ? raw.trim() : "";
   if (!t) return fallback;
   if (/unexpected token\s*</i.test(t) || looksLikeHtml(t)) return HTML_MSG;
+  if (/aborted|timeout|timed out/i.test(t)) return "请求超时，请稍后重试或缩短问题。";
   if (t.length > 180) return `${t.slice(0, 160)}…`;
   return t;
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+export type ApiInit = RequestInit & {
+  /** Client-side abort timeout (ms). Ask uses a longer window so Next HTML error pages are less likely. */
+  timeoutMs?: number;
+};
+
+export async function api<T>(path: string, init: ApiInit = {}): Promise<T> {
+  const { timeoutMs, ...rest } = init;
+  const headers = new Headers(rest.headers);
+  if (rest.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   const token = getToken();
   if (token) headers.set("authorization", `Bearer ${token}`);
-  const res = await fetch(API + path, { ...init, headers, credentials: "include" });
+
+  let signal = rest.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (timeoutMs && timeoutMs > 0) {
+    const ctrl = new AbortController();
+    if (rest.signal) {
+      if (rest.signal.aborted) ctrl.abort(rest.signal.reason);
+      else {
+        rest.signal.addEventListener("abort", () => ctrl.abort(rest.signal?.reason), { once: true });
+      }
+    }
+    timer = setTimeout(() => ctrl.abort(new Error("timeout")), timeoutMs);
+    signal = ctrl.signal;
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(API + path, { ...rest, headers, credentials: "include", signal });
+  } catch (e) {
+    if (timer) clearTimeout(timer);
+    const msg = friendlyErrorMessage(e instanceof Error ? e.message : String(e), "网络错误");
+    const err = new Error(msg) as Error & { code?: string };
+    err.code = /timeout/i.test(msg) ? "timeout" : "network";
+    throw err;
+  }
+  if (timer) clearTimeout(timer);
+
   const text = await res.text();
   const trimmed = (text || "").trim();
   const html = Boolean(trimmed) && looksLikeHtml(trimmed);
@@ -55,7 +88,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
   }
   if (!res.ok || html) {
-    const msg = friendlyErrorMessage(data?.error?.message, html || !res.ok ? HTML_MSG : res.statusText);
+    const msg = friendlyErrorMessage(
+      data?.error?.message,
+      html || !res.ok ? (html ? HTML_MSG : res.statusText || "请求失败") : res.statusText,
+    );
     const err = new Error(msg) as Error & { code?: string };
     if (data?.error?.code) err.code = data.error.code;
     else if (html) err.code = "bad_response";
