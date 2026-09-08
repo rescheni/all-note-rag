@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, type ReactNode } from "react";
+import { splitCiteMarks, type CiteRef } from "./cite-marks";
 
 function escapeHtml(s: string): string {
   return s
@@ -10,21 +11,21 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function inline(md: string): ReactNode[] {
+function inline(md: string, citations: CiteRef[] | undefined, keyBase: string): ReactNode[] {
   const out: ReactNode[] = [];
-  // code `…`, **bold**, *em*, [label](url), plain
+  // code `…`, **bold**, *em*, [label](url), plain (may contain 【n】)
   const re = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[([^\]]+)\]\(([^)]+)\)|[^*`\[]+)/g;
   let i = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(md))) {
     const chunk = m[0];
-    const key = `${i++}`;
+    const key = `${keyBase}-${i++}`;
     if (chunk.startsWith("`") && chunk.endsWith("`")) {
       out.push(<code key={key}>{chunk.slice(1, -1)}</code>);
     } else if (chunk.startsWith("**") && chunk.endsWith("**")) {
-      out.push(<strong key={key}>{inline(chunk.slice(2, -2))}</strong>);
+      out.push(<strong key={key}>{inline(chunk.slice(2, -2), citations, key)}</strong>);
     } else if (chunk.startsWith("*") && chunk.endsWith("*")) {
-      out.push(<em key={key}>{inline(chunk.slice(1, -1))}</em>);
+      out.push(<em key={key}>{inline(chunk.slice(1, -1), citations, key)}</em>);
     } else if (m[2] !== undefined && m[3] !== undefined) {
       const href = m[3].trim();
       const safe =
@@ -37,7 +38,18 @@ function inline(md: string): ReactNode[] {
         </a>,
       );
     } else {
-      out.push(<Fragment key={key}>{chunk}</Fragment>);
+      const parts = splitCiteMarks(chunk, citations, key);
+      if (parts.length === 1 && typeof parts[0] === "string") {
+        out.push(<Fragment key={key}>{parts[0]}</Fragment>);
+      } else {
+        out.push(
+          <Fragment key={key}>
+            {parts.map((p, pi) =>
+              typeof p === "string" ? <Fragment key={`${key}-t${pi}`}>{p}</Fragment> : p,
+            )}
+          </Fragment>,
+        );
+      }
     }
   }
   return out;
@@ -45,9 +57,16 @@ function inline(md: string): ReactNode[] {
 
 /**
  * Small safe markdown subset for ask answers: headings, lists, quotes, hr, bold/italic/code/links.
+ * Optional citations turn 【n】 into interactive superscripts.
  * No raw HTML.
  */
-export function SafeMarkdown({ source }: { source: string }) {
+export function SafeMarkdown({
+  source,
+  citations,
+}: {
+  source: string;
+  citations?: CiteRef[];
+}) {
   const lines = (source || "").replace(/\r\n/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let i = 0;
@@ -66,7 +85,7 @@ export function SafeMarkdown({ source }: { source: string }) {
     const heading = /^(#{1,3})\s+(.+)$/.exec(line);
     if (heading) {
       const level = heading[1].length;
-      const body = inline(heading[2]);
+      const body = inline(heading[2], citations, `h${key}`);
       if (level === 1) blocks.push(<h1 key={key++}>{body}</h1>);
       else if (level === 2) blocks.push(<h2 key={key++}>{body}</h2>);
       else blocks.push(<h3 key={key++}>{body}</h3>);
@@ -79,10 +98,11 @@ export function SafeMarkdown({ source }: { source: string }) {
         quote.push((lines[i] ?? "").replace(/^>\s?/, ""));
         i += 1;
       }
+      const qKey = key++;
       blocks.push(
-        <blockquote key={key++}>
+        <blockquote key={qKey}>
           {quote.map((q, qi) => (
-            <p key={qi}>{inline(q)}</p>
+            <p key={qi}>{inline(q, citations, `q${qKey}-${qi}`)}</p>
           ))}
         </blockquote>,
       );
@@ -96,10 +116,11 @@ export function SafeMarkdown({ source }: { source: string }) {
         i += 1;
       }
       const ListTag = ordered ? "ol" : "ul";
+      const lKey = key++;
       blocks.push(
-        <ListTag key={key++}>
+        <ListTag key={lKey}>
           {items.map((it, ii) => (
-            <li key={ii}>{inline(it)}</li>
+            <li key={ii}>{inline(it, citations, `l${lKey}-${ii}`)}</li>
           ))}
         </ListTag>,
       );
@@ -134,10 +155,10 @@ export function SafeMarkdown({ source }: { source: string }) {
       para.push(lines[i] ?? "");
       i += 1;
     }
-    blocks.push(<p key={key++}>{inline(para.join(" "))}</p>);
+    const pKey = key++;
+    blocks.push(<p key={pKey}>{inline(para.join(" "), citations, `p${pKey}`)}</p>);
   }
   return <div className="ask-md">{blocks}</div>;
 }
 
-// silence unused helper warning if tree-shaken oddly
 void escapeHtml;

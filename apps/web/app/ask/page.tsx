@@ -7,6 +7,7 @@ import { SafeMarkdown } from "@/lib/safe-markdown";
 import { PathCrumbs, decodeSegment } from "../notes/crumbs";
 import { IconAsk, IconClose } from "../icons";
 import {
+  AnimatePresence,
   SignatureButton,
   easeOutExpo,
   motion,
@@ -54,7 +55,21 @@ type ChatMessage = {
   created_at: string;
 };
 
+/** In-flight reveal after ask returns: index sources, then show answer. */
+type RevealState = {
+  id: string;
+  citations: Citation[];
+  answer: string;
+  mode?: string | null;
+  ai_failed?: boolean;
+  ai_error?: string | null;
+  phase: "retrieve" | "answer";
+  activeIndex: number;
+};
+
 const ASK_TIMEOUT_MS = 180_000;
+const SOURCES_OPEN_KEY = "note-hub:ask-sources-open";
+const RETRIEVE_STEP_MS = 380;
 
 function shelfHref(c: Citation): string | null {
   if (!c.connection_id || !c.path) return null;
@@ -93,74 +108,227 @@ const itemVariants = {
   },
 };
 
+function useSourcesOpenPref(): [boolean, (v: boolean) => void] {
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SOURCES_OPEN_KEY);
+      if (raw === "0") setOpen(false);
+      else if (raw === "1") setOpen(true);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const set = useCallback((v: boolean) => {
+    setOpen(v);
+    try {
+      localStorage.setItem(SOURCES_OPEN_KEY, v ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  return [open, set];
+}
+
 function CitationsBlock({
   citations,
   reduced,
+  scanning,
+  activeIndex,
+  forceOpen,
 }: {
   citations: Citation[];
   reduced: boolean | null;
+  /** Step-through retrieve animation */
+  scanning?: boolean;
+  activeIndex?: number;
+  /** While scanning, keep body open */
+  forceOpen?: boolean;
 }) {
+  const [prefOpen, setPrefOpen] = useSourcesOpenPref();
+  const open = forceOpen || scanning ? true : prefOpen;
+  const panelId = useId();
+
   if (!citations.length) {
     return <p className="hub-inline-empty muted">这次没有可点的来源卡片。</p>;
   }
-  return (
-    <>
-      <div className="cite-chip-row" aria-label="来源速览">
-        {citations.map((c, i) => (
-          <motion.div
-            key={`chip-${c.note_id}-${c.source_block_id || c.block_id}-${i}`}
-            whileHover={reduced ? undefined : { y: -1, scale: 1.02 }}
-            whileTap={reduced ? undefined : { scale: 0.97 }}
-            transition={springSoft}
-          >
-            <Link href={citeHref(c)} className="cite-chip">
-              <span className="cite-chip-n" aria-hidden="true">
-                {i + 1}
-              </span>
-              <span className="cite-chip-t">{decodeSegment(c.title) || "未命名"}</span>
-            </Link>
-          </motion.div>
-        ))}
-      </div>
 
-      <h3 className="ask-cites-h">来源</h3>
-      <motion.div
-        className="cite-stack"
-        variants={reduced ? undefined : listVariants}
-        initial={reduced ? false : "hidden"}
-        animate="show"
-      >
+  const visible = scanning
+    ? citations.slice(0, Math.max(0, (activeIndex ?? 0) + 1))
+    : citations;
+
+  return (
+    <div className={`ask-cites${scanning ? " ask-cites-scanning" : ""}`}>
+      <div className="cite-chip-row" aria-label="来源速览">
         {citations.map((c, i) => {
-          const shelf = shelfHref(c);
+          const shown = !scanning || i <= (activeIndex ?? -1);
+          const active = scanning && i === activeIndex;
+          if (!shown) return null;
           return (
-            <motion.article
-              key={c.note_id + (c.source_block_id || c.block_id) + i}
-              className="cite-card"
-              variants={reduced ? undefined : itemVariants}
-              whileHover={reduced ? undefined : { y: -2 }}
+            <motion.div
+              key={`chip-${c.note_id}-${c.source_block_id || c.block_id}-${i}`}
+              initial={scanning && !reduced ? { opacity: 0, y: 4, scale: 0.94 } : false}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={springSoft}
+              whileHover={reduced ? undefined : { y: -1, scale: 1.02 }}
+              whileTap={reduced ? undefined : { scale: 0.97 }}
             >
-              <Link href={citeHref(c)} className="cite-card-main">
-                <div className="cite-card-head">
-                  <span className="cite-chip-n" aria-hidden="true">
-                    {i + 1}
-                  </span>
-                  <h3>{decodeSegment(c.title) || "未命名"}</h3>
-                </div>
-                {c.path ? <PathCrumbs path={c.path} title={c.title} /> : null}
-                {c.quote ? <blockquote className="ask-quote">{c.quote}</blockquote> : null}
+              <Link
+                href={citeHref(c)}
+                className={`cite-chip${active ? " cite-chip-active" : ""}`}
+              >
+                <span className="cite-chip-n" aria-hidden="true">
+                  {i + 1}
+                </span>
+                <span className="cite-chip-t">{decodeSegment(c.title) || "未命名"}</span>
               </Link>
-              {shelf ? (
-                <div className="cite-card-foot">
-                  <Link href={shelf} className="hit-shelf">
-                    在书架中打开
-                  </Link>
-                </div>
-              ) : null}
-            </motion.article>
+            </motion.div>
           );
         })}
-      </motion.div>
+      </div>
+
+      <div className="ask-cites-toggle-row">
+        <button
+          type="button"
+          className="ask-cites-toggle"
+          aria-expanded={open}
+          aria-controls={panelId}
+          disabled={Boolean(forceOpen || scanning)}
+          onClick={() => setPrefOpen(!prefOpen)}
+        >
+          <span className="ask-cites-chevron" aria-hidden="true" data-open={open ? "1" : "0"} />
+          <span className="ask-cites-h">来源</span>
+          <span className="ask-cites-count muted">{citations.length}</span>
+          {scanning ? (
+            <span className="ask-retrieve-live muted" aria-live="polite">
+              正在对照第 {(activeIndex ?? 0) + 1} / {citations.length} 条…
+            </span>
+          ) : (
+            <span className="ask-cites-hint muted">{open ? "收起" : "展开"}</span>
+          )}
+        </button>
+      </div>
+
+      <AnimatePresence initial={false}>
+        {open ? (
+          <motion.div
+            id={panelId}
+            className="cite-stack-wrap"
+            key="stack"
+            initial={reduced ? false : { height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={reduced ? undefined : { height: 0, opacity: 0 }}
+            transition={{ duration: 0.28, ease: easeOutExpo }}
+            style={{ overflow: "hidden" }}
+          >
+            <motion.div
+              className="cite-stack"
+              variants={reduced || scanning ? undefined : listVariants}
+              initial={reduced || scanning ? false : "hidden"}
+              animate="show"
+            >
+              {visible.map((c, i) => {
+                const shelf = shelfHref(c);
+                const active = scanning && i === activeIndex;
+                return (
+                  <motion.article
+                    key={c.note_id + (c.source_block_id || c.block_id) + i}
+                    className={`cite-card${active ? " cite-card-active" : ""}`}
+                    variants={reduced || scanning ? undefined : itemVariants}
+                    initial={
+                      scanning && !reduced ? { opacity: 0, y: 10, scale: 0.98 } : false
+                    }
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={springSoft}
+                    whileHover={reduced || scanning ? undefined : { y: -2 }}
+                  >
+                    <Link href={citeHref(c)} className="cite-card-main">
+                      <div className="cite-card-head">
+                        <span className="cite-chip-n" aria-hidden="true">
+                          {i + 1}
+                        </span>
+                        <h3>{decodeSegment(c.title) || "未命名"}</h3>
+                      </div>
+                      {c.path ? <PathCrumbs path={c.path} title={c.title} /> : null}
+                      {c.quote ? <blockquote className="ask-quote">{c.quote}</blockquote> : null}
+                    </Link>
+                    {shelf ? (
+                      <div className="cite-card-foot">
+                        <Link href={shelf} className="hit-shelf">
+                          在书架中打开
+                        </Link>
+                      </div>
+                    ) : null}
+                  </motion.article>
+                );
+              })}
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function AssistantBody({
+  content,
+  citations,
+  mode,
+  aiFailed,
+  aiError,
+  reduced,
+  scanning,
+  activeIndex,
+}: {
+  content: string | null;
+  citations: Citation[];
+  mode?: string | null;
+  aiFailed?: boolean;
+  aiError?: string | null;
+  reduced: boolean | null;
+  scanning?: boolean;
+  activeIndex?: number;
+}) {
+  return (
+    <>
+      {aiFailed ? (
+        <p className="ask-ai-failed" role="status">
+          {`AI 未能生成（${aiError || "未知原因"}）. 以下为检索摘录。`}
+        </p>
+      ) : mode && !scanning ? (
+        <p className="ask-mode-pill muted">
+          {mode === "ai" ? "回答来自大模型（附引用）" : "回答为本地抽取（未走大模型）"}
+        </p>
+      ) : scanning ? (
+        <p className="ask-mode-pill muted" aria-live="polite">
+          先对照来源，再展开回答
+        </p>
+      ) : null}
+
+      {scanning ? (
+        <CitationsBlock
+          citations={citations}
+          reduced={reduced}
+          scanning
+          activeIndex={activeIndex}
+          forceOpen
+        />
+      ) : null}
+
+      {content != null && !scanning ? (
+        <motion.article
+          className="ask-answer-paper"
+          initial={reduced ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.32, ease: easeOutExpo }}
+        >
+          <SafeMarkdown source={content} citations={citations} />
+        </motion.article>
+      ) : null}
+
+      {!scanning && citations.length ? (
+        <CitationsBlock citations={citations} reduced={reduced} />
+      ) : null}
     </>
   );
 }
@@ -180,27 +348,43 @@ export default function AskPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadingThreads, setLoadingThreads] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [reveal, setReveal] = useState<RevealState | null>(null);
+  const revealTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  const loadMessages = useCallback(async (spaceId: string, tid: string) => {
-    setLoadingMessages(true);
-    setErr("");
-    try {
-      const r = await api<{ messages: ChatMessage[] }>(
-        `/v1/spaces/${spaceId}/ask/threads/${tid}/messages`,
-      );
-      setMessages(
-        (r.messages ?? []).map((m) => ({
-          ...m,
-          citations: normalizeCitations(m.citations),
-        })),
-      );
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "加载消息失败");
-      setMessages([]);
-    } finally {
-      setLoadingMessages(false);
-    }
+  const clearRevealTimers = useCallback(() => {
+    for (const t of revealTimers.current) clearTimeout(t);
+    revealTimers.current = [];
   }, []);
+
+  useEffect(() => () => clearRevealTimers(), [clearRevealTimers]);
+
+  const loadMessages = useCallback(
+    async (spaceId: string, tid: string, opts?: { silent?: boolean }) => {
+      if (!opts?.silent) {
+        setLoadingMessages(true);
+        setErr("");
+      }
+      try {
+        const r = await api<{ messages: ChatMessage[] }>(
+          `/v1/spaces/${spaceId}/ask/threads/${tid}/messages`,
+        );
+        setMessages(
+          (r.messages ?? []).map((m) => ({
+            ...m,
+            citations: normalizeCitations(m.citations),
+          })),
+        );
+      } catch (e) {
+        if (!opts?.silent) {
+          setErr(e instanceof Error ? e.message : "加载消息失败");
+          setMessages([]);
+        }
+      } finally {
+        if (!opts?.silent) setLoadingMessages(false);
+      }
+    },
+    [],
+  );
 
   const refreshThreads = useCallback(
     async (spaceId: string, opts?: { openLatest?: boolean }) => {
@@ -244,9 +428,11 @@ export default function AskPage() {
     const el = feedRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages, busy]);
+  }, [messages, busy, reveal]);
 
   function startNewChat() {
+    clearRevealTimers();
+    setReveal(null);
     setThreadId(null);
     setMessages([]);
     setErr("");
@@ -255,6 +441,8 @@ export default function AskPage() {
 
   async function selectThread(tid: string) {
     if (!space || tid === threadId) return;
+    clearRevealTimers();
+    setReveal(null);
     setThreadId(tid);
     setErr("");
     await loadMessages(space.id, tid);
@@ -266,6 +454,8 @@ export default function AskPage() {
       await api(`/v1/spaces/${space.id}/ask/threads/${tid}`, { method: "DELETE" });
       setThreads((prev) => prev.filter((t) => t.id !== tid));
       if (threadId === tid) {
+        clearRevealTimers();
+        setReveal(null);
         setThreadId(null);
         setMessages([]);
       }
@@ -274,13 +464,54 @@ export default function AskPage() {
     }
   }
 
+  function runRetrieveThenAnswer(
+    payload: Omit<RevealState, "phase" | "activeIndex">,
+    after: () => Promise<void>,
+  ) {
+    clearRevealTimers();
+    const cites = payload.citations;
+    if (!cites.length || reduced) {
+      setReveal({ ...payload, phase: "answer", activeIndex: -1 });
+      setBusy(false);
+      void after().finally(() => setReveal(null));
+      return;
+    }
+
+    setReveal({ ...payload, phase: "retrieve", activeIndex: 0 });
+    setBusy(false);
+
+    const step = RETRIEVE_STEP_MS;
+    for (let i = 1; i < cites.length; i++) {
+      const t = setTimeout(() => {
+        setReveal((prev) =>
+          prev && prev.id === payload.id ? { ...prev, activeIndex: i } : prev,
+        );
+      }, step * i);
+      revealTimers.current.push(t);
+    }
+    const done = setTimeout(() => {
+      setReveal((prev) =>
+        prev && prev.id === payload.id ? { ...prev, phase: "answer", activeIndex: cites.length - 1 } : prev,
+      );
+      void after().finally(() => {
+        // Keep local reveal briefly then drop once server messages land
+        setTimeout(() => {
+          setReveal((prev) => (prev && prev.id === payload.id ? null : prev));
+        }, 80);
+      });
+    }, step * cites.length + 120);
+    revealTimers.current.push(done);
+  }
+
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!space || busy) return;
+    if (!space || busy || reveal?.phase === "retrieve") return;
     const form = e.currentTarget;
     const query = String(new FormData(form).get("query") ?? "").trim();
     if (!query) return;
     setErr("");
+    clearRevealTimers();
+    setReveal(null);
     setBusy(true);
 
     const optimisticId = `local-user-${Date.now()}`;
@@ -307,26 +538,26 @@ export default function AskPage() {
       });
       const tid = res.thread_id ?? threadId;
       if (tid) setThreadId(tid);
-      const assistant: ChatMessage = {
-        id: `local-asst-${Date.now()}`,
-        role: "assistant",
-        content: res.answer_markdown,
-        citations: res.citations ?? [],
-        mode: res.mode ?? null,
-        ai_failed: Boolean(res.ai_failed),
-        ai_error: res.ai_error ?? null,
-        created_at: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, assistant]);
-      if (space) await refreshThreads(space.id);
-      if (tid && space) {
-        // Reload from server so ids/order match persistence
-        await loadMessages(space.id, tid);
-      }
+      const cites = res.citations ?? [];
+      const revealId = `reveal-${Date.now()}`;
+
+      runRetrieveThenAnswer(
+        {
+          id: revealId,
+          citations: cites,
+          answer: res.answer_markdown,
+          mode: res.mode ?? null,
+          ai_failed: Boolean(res.ai_failed),
+          ai_error: res.ai_error ?? null,
+        },
+        async () => {
+          if (space) await refreshThreads(space.id);
+          if (tid && space) await loadMessages(space.id, tid, { silent: true });
+        },
+      );
     } catch (er) {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
       setErr(er instanceof Error ? er.message : "提问失败");
-    } finally {
       setBusy(false);
     }
   }
@@ -423,7 +654,7 @@ export default function AskPage() {
               </div>
             ) : null}
 
-            {!loadingMessages && !messages.length && !busy && !err ? (
+            {!loadingMessages && !messages.length && !busy && !reveal && !err ? (
               <div className="hub-state hub-state-idle">
                 <strong>带着问题来翻笔记</strong>
                 <p className="muted">回答会附上来源引用。对话会在刷新与重新登录后保留。</p>
@@ -445,8 +676,15 @@ export default function AskPage() {
                   </motion.div>
                 );
               }
+              // Avoid duplicating the in-flight reveal once server messages land
+              if (
+                reveal &&
+                m.role === "assistant" &&
+                m === messages[messages.length - 1]
+              ) {
+                return null;
+              }
               const cites = normalizeCitations(m.citations);
-              const aiFailed = Boolean(m.ai_failed);
               return (
                 <motion.div
                   key={m.id}
@@ -455,24 +693,38 @@ export default function AskPage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.26, ease: easeOutExpo }}
                 >
-                  {aiFailed ? (
-                    <p className="ask-ai-failed" role="status">
-                      {`AI 未能生成（${m.ai_error || "未知原因"}）. 以下为检索摘录。`}
-                    </p>
-                  ) : m.mode ? (
-                    <p className="ask-mode-pill muted">
-                      {m.mode === "ai"
-                        ? "回答来自大模型（附引用）"
-                        : "回答为本地抽取（未走大模型）"}
-                    </p>
-                  ) : null}
-                  <article className="ask-answer-paper">
-                    <SafeMarkdown source={m.content} />
-                  </article>
-                  <CitationsBlock citations={cites} reduced={reduced} />
+                  <AssistantBody
+                    content={m.content}
+                    citations={cites}
+                    mode={m.mode}
+                    aiFailed={Boolean(m.ai_failed)}
+                    aiError={m.ai_error}
+                    reduced={reduced}
+                  />
                 </motion.div>
               );
             })}
+
+            {reveal ? (
+              <motion.div
+                key={reveal.id}
+                className="ask-bubble ask-bubble-assistant"
+                initial={reduced ? false : { opacity: 0.92, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.26, ease: easeOutExpo }}
+              >
+                <AssistantBody
+                  content={reveal.phase === "answer" ? reveal.answer : null}
+                  citations={reveal.citations}
+                  mode={reveal.mode}
+                  aiFailed={reveal.ai_failed}
+                  aiError={reveal.ai_error}
+                  reduced={reduced}
+                  scanning={reveal.phase === "retrieve"}
+                  activeIndex={reveal.activeIndex}
+                />
+              </motion.div>
+            ) : null}
 
             {busy ? (
               <div className="hub-state hub-state-loading" aria-busy="true" aria-live="polite">
@@ -481,7 +733,7 @@ export default function AskPage() {
                   <span />
                   <span />
                 </div>
-                <p>正在从笔记里找证据…</p>
+                <p>正在从笔记里检索…</p>
               </div>
             ) : null}
 
@@ -508,12 +760,12 @@ export default function AskPage() {
               type="text"
               placeholder="问当前空间的笔记…"
               required
-              disabled={busy || !space}
+              disabled={busy || !space || reveal?.phase === "retrieve"}
               autoComplete="off"
               enterKeyHint="send"
             />
-            <SignatureButton type="submit" disabled={busy || !space}>
-              {busy ? "检索中…" : "提问"}
+            <SignatureButton type="submit" disabled={busy || !space || reveal?.phase === "retrieve"}>
+              {busy ? "检索中…" : reveal?.phase === "retrieve" ? "对照中…" : "提问"}
             </SignatureButton>
           </form>
         </section>
