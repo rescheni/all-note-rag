@@ -14,7 +14,7 @@ import { query, withTx } from "../db.ts";
 import { env } from "../env.ts";
 import { errors, jsonError } from "../errors.ts";
 import { requireRole, requireUser, roleDenied, type AuthUser } from "../auth.ts";
-import { cancelConnectionJobs, enqueueSync, enqueueSyncFiles } from "../queue.ts";
+import { cancelConnectionJobs, enqueueSync, enqueueSyncFiles, markZombieSyncRuns } from "../queue.ts";
 import { connectionSecretFlags, decryptConnectionSecrets, persistEncryptedSecrets, publicConnection } from "../connection-util.ts";
 import { runContactsSync } from "../contacts-sync.ts";
 import { deleteHubObjects } from "../s3.ts";
@@ -64,6 +64,8 @@ connectionRoutes.get("/spaces/:id/connections", async (c) => {
   const gate = await requireRole(user.id, spaceId, "viewer");
   const denied = roleDenied(c, gate);
   if (denied) return denied;
+  // Clear hung runs so latest_run / UI do not stay on 「同步中」 forever.
+  await markZombieSyncRuns();
   const r = await query<{
     connection: Record<string, unknown>;
     latest_run: LatestRunRow | null;

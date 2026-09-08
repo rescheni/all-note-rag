@@ -15,13 +15,28 @@ export type SyncRunProgress = {
   skipped?: number;
 };
 
+/** Runs with no finished_at older than this are treated as stale zombies (UI + poll). */
+export const SYNC_RUN_STALE_MS = 45 * 60 * 1000;
+
 function n(v: unknown): number {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
 }
 
+function startedAtMs(run: SyncRunProgress): number | null {
+  if (!run.started_at) return null;
+  const t = Date.parse(run.started_at);
+  return Number.isFinite(t) ? t : null;
+}
+
+/** True only for an active (unfinished, non-stale) sync run. */
 export function isRunInProgress(run: SyncRunProgress | null | undefined): boolean {
-  return Boolean(run && !run.finished_at);
+  if (!run || run.finished_at) return false;
+  const started = startedAtMs(run);
+  // Missing/invalid started_at: do not claim "同步中".
+  if (started == null) return false;
+  if (Date.now() - started > SYNC_RUN_STALE_MS) return false;
+  return true;
 }
 
 export function SyncRunStatus({ run }: { run: SyncRunProgress | null | undefined }) {
@@ -30,7 +45,7 @@ export function SyncRunStatus({ run }: { run: SyncRunProgress | null | undefined
   const filesDone = n(run.files_done);
   const chunksTotal = n(run.chunks_total);
   const chunksDone = n(run.chunks_done);
-  const running = !run.finished_at;
+  const running = isRunInProgress(run);
   const barTotal = chunksTotal > 0 ? chunksTotal : filesTotal;
   const barDone = chunksTotal > 0 ? chunksDone : filesDone;
   const pct = barTotal > 0 ? Math.min(100, Math.round((barDone / barTotal) * 100)) : 0;
@@ -67,6 +82,15 @@ export function SyncRunStatus({ run }: { run: SyncRunProgress | null | undefined
 
   const files = filesDone || filesTotal;
   const chunks = chunksDone || chunksTotal;
+  // Stale unfinished runs still show as last attempt summary, not 同步中.
+  if (!run.finished_at && (files > 0 || chunks > 0)) {
+    return (
+      <div className="sync-progress sync-progress-done">
+        上次 {files} 篇 · {chunks} 个数据块
+      </div>
+    );
+  }
+  if (!run.finished_at) return null;
   return (
     <div className="sync-progress sync-progress-done">
       上次 {files} 篇 · {chunks} 个数据块

@@ -51,7 +51,10 @@ function createMutex() {
 export async function markZombieSyncRuns(): Promise<void> {
   await query(
     `UPDATE sync_run SET finished_at = now()
-     WHERE finished_at IS NULL AND files_total = 0 AND started_at < now() - interval '2 minutes'`,
+     WHERE finished_at IS NULL AND (
+       (COALESCE(files_total, 0) = 0 AND started_at < now() - interval '2 minutes')
+       OR started_at < now() - interval '45 minutes'
+     )`,
   );
 }
 

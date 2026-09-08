@@ -19,10 +19,18 @@ export const syncFileQueue = new Queue("sync.file", {
 /** Quiet-window before a file-level job runs. Burst of puts → one sync.file. */
 export const FILE_SYNC_DEBOUNCE_MS = 1_500;
 
+/**
+ * Close sync_run rows left open after worker crash / hung adapter.
+ * - Never listed files (files_total=0): stale after 2 minutes
+ * - Listed but no finish: stale after 45 minutes (matches UI SYNC_RUN_STALE_MS)
+ */
 export async function markZombieSyncRuns(): Promise<void> {
   await query(
     `UPDATE sync_run SET finished_at = now()
-     WHERE finished_at IS NULL AND files_total = 0 AND started_at < now() - interval '2 minutes'`,
+     WHERE finished_at IS NULL AND (
+       (COALESCE(files_total, 0) = 0 AND started_at < now() - interval '2 minutes')
+       OR started_at < now() - interval '45 minutes'
+     )`,
   );
 }
 
@@ -33,6 +41,7 @@ export async function hasUnfinishedSyncRun(connectionId: string): Promise<boolea
 
 export async function enqueueSync(connectionId: string): Promise<{ queued: boolean; reason?: string; jobId: string }> {
   const jobId = "sync-" + connectionId;
+  await markZombieSyncRuns();
   if (await hasUnfinishedSyncRun(connectionId)) {
     return { queued: false, reason: "sync_in_progress", jobId };
   }

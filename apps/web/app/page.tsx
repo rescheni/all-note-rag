@@ -36,6 +36,8 @@ export default function HomePage() {
   const [pollUntil, setPollUntil] = useState(0);
   const [activity, setActivity] = useState<HeatDay[]>([]);
   const [activityYears, setActivityYears] = useState<HeatYear[]>([]);
+  /** False on SSR + first client paint so auth/role UI does not hydrate-mismatch. */
+  const [mounted, setMounted] = useState(false);
   const pollUntilRef = useRef(0);
   pollUntilRef.current = pollUntil;
 
@@ -61,6 +63,11 @@ export default function HomePage() {
   }
 
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
     if (!getToken()) {
       location.href = "/login";
       return;
@@ -76,7 +83,7 @@ export default function HomePage() {
       /* ignore */
     }
     boot().catch((e) => setErr(e instanceof Error ? e.message : "加载失败"));
-  }, []);
+  }, [mounted]);
 
   const anyRunning = conns.some((c) => isRunInProgress(c.latest_run));
 
@@ -220,22 +227,23 @@ export default function HomePage() {
 
       <Heatmap days={activity} years={activityYears} />
 
-      {!canManageConn && space && (
+      {/* Role / auth-dependent siblings only after mount — same tags on SSR & first paint. */}
+      {mounted && !canManageConn && space ? (
         <p className="muted">你是只读成员，可以浏览笔记、搜索与问答，但不能管理连接或同步。</p>
-      )}
+      ) : null}
       <section className="home-conns">
         <div className="home-conns-head">
           <h2>连接</h2>
-          {canManageConn && (
+          {mounted && canManageConn ? (
             <p className="muted home-manage-conn">
               <Link href="/connections">管理接入 →</Link>
             </p>
-          )}
+          ) : null}
         </div>
         {conns.length === 0 && (
           <p className="empty-desk">
             还没有连接。
-            {canManageConn ? (
+            {mounted && canManageConn ? (
               <>
                 {" "}
                 <Link href="/connections">去接入管理</Link>
@@ -243,7 +251,7 @@ export default function HomePage() {
             ) : null}
           </p>
         )}
-        <HomeConnShelf conns={conns} canSync={canManageConn} onSync={triggerSync} />
+        <HomeConnShelf conns={conns} canSync={Boolean(mounted && canManageConn)} onSync={triggerSync} />
       </section>
 
       <section>

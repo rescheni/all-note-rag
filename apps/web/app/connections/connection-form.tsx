@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, friendlyErrorMessage, getToken } from "@/lib/api";
 import { FeishuQr } from "./feishu-qr";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
-import { SyncRunStatus, type SyncRunProgress } from "../sync-progress";
+import { isRunInProgress, SyncRunStatus, type SyncRunProgress } from "../sync-progress";
 import { SignatureButton, SourcePills } from "../ui-motion";
 
 export const SOURCES = [
@@ -182,7 +182,7 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
           if (cancelled) return;
           const next = r.runs?.[0] ?? null;
           setRun(next);
-          const running = Boolean(next && !next.finished_at);
+          const running = isRunInProgress(next);
           const delay = running || Date.now() < pollUntil ? 2000 : 8000;
           timer = window.setTimeout(tick, delay);
         })
