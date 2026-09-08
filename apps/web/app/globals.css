@@ -1120,7 +1120,34 @@ blockquote.ask-quote {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   box-shadow: var(--shadow-lift);
   background: color-mix(in srgb, var(--paper) 88%, var(--moss-wash));
+  position: relative;
 }
+.ask-cites-scanning .cite-card-active::after {
+  content: "";
+  position: absolute;
+  left: 0.6rem;
+  right: 0.6rem;
+  top: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 75%, transparent),
+    transparent
+  );
+  animation: ask-scan-beam 0.9s var(--ease) infinite;
+  pointer-events: none;
+}
+@keyframes ask-scan-beam {
+  0% { transform: translateY(0.35rem); opacity: 0; }
+  25% { opacity: 0.9; }
+  100% { transform: translateY(4.2rem); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ask-cites-scanning .cite-card-active::after { animation: none; opacity: 0; }
+}
+.ask-cites + .ask-answer-paper { margin-top: 0.65rem; }
 .cite-stack-wrap { margin: 0; }
 
 /* Citation corner marks in answer markdown */

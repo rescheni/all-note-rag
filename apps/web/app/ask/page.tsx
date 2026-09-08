@@ -109,12 +109,13 @@ const itemVariants = {
 };
 
 function useSourcesOpenPref(): [boolean, (v: boolean) => void] {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SOURCES_OPEN_KEY);
-      if (raw === "0") setOpen(false);
-      else if (raw === "1") setOpen(true);
+      // Default hidden; only expand if user previously chose open.
+      if (raw === "1") setOpen(true);
+      else setOpen(false);
     } catch {
       /* ignore */
     }
@@ -146,8 +147,17 @@ function CitationsBlock({
   forceOpen?: boolean;
 }) {
   const [prefOpen, setPrefOpen] = useSourcesOpenPref();
+  const wasScanning = useRef(false);
   const open = forceOpen || scanning ? true : prefOpen;
   const panelId = useId();
+
+  useEffect(() => {
+    if (wasScanning.current && !scanning) {
+      // Search-find effect done → fold sources away above the answer.
+      setPrefOpen(false);
+    }
+    wasScanning.current = Boolean(scanning);
+  }, [scanning, setPrefOpen]);
 
   if (!citations.length) {
     return <p className="hub-inline-empty muted">这次没有可点的来源卡片。</p>;
@@ -201,7 +211,7 @@ function CitationsBlock({
           <span className="ask-cites-count muted">{citations.length}</span>
           {scanning ? (
             <span className="ask-retrieve-live muted" aria-live="polite">
-              正在对照第 {(activeIndex ?? 0) + 1} / {citations.length} 条…
+              找到 {(activeIndex ?? 0) + 1} / {citations.length} · 正在往下搜寻…
             </span>
           ) : (
             <span className="ask-cites-hint muted">{open ? "收起" : "展开"}</span>
@@ -291,7 +301,7 @@ function AssistantBody({
 }) {
   return (
     <>
-      {aiFailed ? (
+      {aiFailed && !scanning ? (
         <p className="ask-ai-failed" role="status">
           {`AI 未能生成（${aiError || "未知原因"}）. 以下为检索摘录。`}
         </p>
@@ -301,17 +311,17 @@ function AssistantBody({
         </p>
       ) : scanning ? (
         <p className="ask-mode-pill muted" aria-live="polite">
-          先对照来源，再展开回答
+          正在搜寻相关笔记…
         </p>
       ) : null}
 
-      {scanning ? (
+      {citations.length ? (
         <CitationsBlock
           citations={citations}
           reduced={reduced}
-          scanning
+          scanning={scanning}
           activeIndex={activeIndex}
-          forceOpen
+          forceOpen={scanning}
         />
       ) : null}
 
@@ -324,10 +334,6 @@ function AssistantBody({
         >
           <SafeMarkdown source={content} citations={citations} />
         </motion.article>
-      ) : null}
-
-      {!scanning && citations.length ? (
-        <CitationsBlock citations={citations} reduced={reduced} />
       ) : null}
     </>
   );
@@ -489,17 +495,24 @@ export default function AskPage() {
       }, step * i);
       revealTimers.current.push(t);
     }
+    // Hold on last hit, then fold sources and reveal answer underneath.
     const done = setTimeout(() => {
       setReveal((prev) =>
-        prev && prev.id === payload.id ? { ...prev, phase: "answer", activeIndex: cites.length - 1 } : prev,
+        prev && prev.id === payload.id
+          ? { ...prev, phase: "answer", activeIndex: cites.length - 1 }
+          : prev,
       );
+      try {
+        localStorage.setItem(SOURCES_OPEN_KEY, "0");
+      } catch {
+        /* ignore */
+      }
       void after().finally(() => {
-        // Keep local reveal briefly then drop once server messages land
         setTimeout(() => {
           setReveal((prev) => (prev && prev.id === payload.id ? null : prev));
-        }, 80);
+        }, 120);
       });
-    }, step * cites.length + 120);
+    }, step * cites.length + 420);
     revealTimers.current.push(done);
   }
 
