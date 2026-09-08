@@ -16,8 +16,15 @@ export function storeSpaceId(id: string) {
   window.dispatchEvent(new Event(SPACE_CHANGE_EVENT));
 }
 
+/** Prefer the personal space; ignore legacy team rows for default selection. */
 export function selectSpace(spaces: Space[]): Space | null {
   if (!spaces.length) return null;
+  const personal = spaces.find((s) => s.kind === "personal");
+  if (personal) {
+    const stored = getStoredSpaceId();
+    if (stored !== personal.id) storeSpaceId(personal.id);
+    return personal;
+  }
   const stored = getStoredSpaceId();
   const found = stored ? spaces.find((s) => s.id === stored) : undefined;
   const sp = found ?? spaces[0];

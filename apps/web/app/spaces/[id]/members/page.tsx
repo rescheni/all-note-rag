@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { getToken } from "@/lib/api";
 
-/** Team/members UX removed — personal notes only. Sub-accounts live on /account. */
+/** Members route retired — personal notes only. Sub-accounts live on /account. */
 export default function SpaceMembersPage() {
   useEffect(() => {
     if (!getToken()) {
@@ -15,9 +15,9 @@ export default function SpaceMembersPage() {
 
   return (
     <>
-      <h1>成员</h1>
+      <h1>子账号</h1>
       <p className="muted">
-        笔记中枢现为个人只读笔记中枢，不再提供团队成员协作。子账号与 API 令牌请前往{" "}
+        笔记中枢是个人只读中枢。子账号与 API 令牌请前往{" "}
         <Link href="/account">账号</Link>。
       </p>
     </>

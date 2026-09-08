@@ -74,27 +74,8 @@ spaceRoutes.get("/spaces", async (c) => {
 });
 
 spaceRoutes.post("/spaces", async (c) => {
-  const user = c.get("user");
-  const body = (await c.req.json().catch(() => ({}))) as { name?: unknown; kind?: unknown };
-  const name = typeof body.name === "string" ? body.name.trim() : "";
-  const kind = typeof body.kind === "string" ? body.kind.trim() : "";
-  if (!name) return jsonError(c, 400, "invalid_request", "需要名称");
-  if (kind === "personal") {
-    return jsonError(c, 400, "invalid_request", "个人空间仅在注册时自动创建");
-  }
-  if (kind !== "team") return jsonError(c, 400, "invalid_request", "kind 必须为 team");
-  const s = await query(
-    `INSERT INTO spaces (kind, name, owner_user_id)
-     VALUES ('team', $1, $2)
-     RETURNING id, kind, name, owner_user_id, created_at, updated_at`,
-    [name, user.id],
-  );
-  const space = s.rows[0];
-  await query(
-    `INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, 'owner')`,
-    [space.id, user.id],
-  );
-  return c.json({ space, role: "owner" }, 201);
+  // Personal-only product: team space creation is retired.
+  return jsonError(c, 403, "forbidden", "笔记中枢为个人空间，不再支持新建团队空间");
 });
 
 spaceRoutes.get("/spaces/:id", async (c) => {

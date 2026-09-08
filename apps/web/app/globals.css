@@ -4167,3 +4167,31 @@ html[data-theme="ink"] .ask-md code,
 html[data-theme="ink"] .ask-md pre {
   background: var(--code-wash);
 }
+/* HOME_OPERATE_REDESIGN_2026 */
+.home-desk { max-width: 58rem; }
+.home-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin: 0 0 1.35rem; padding-bottom: 0.85rem; border-bottom: 1px solid var(--line); }
+.home-hero-text { min-width: 0; }
+.home-hero h1 { margin: 0; font-size: 1.65rem; letter-spacing: 0.015em; }
+.home-lede { margin: 0.35rem 0 0; color: var(--muted); font-size: 0.8125rem; line-height: 1.45; }
+.home-space-pill { display: inline-flex; align-items: center; gap: 0.4rem; flex-shrink: 0; margin-top: 0.35rem; padding: 0.28rem 0.7rem; font-size: 0.75rem; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 999px; box-shadow: 0 2px 8px rgba(60, 51, 44, 0.04); }
+.home-loading { margin: 0.5rem 0 1.5rem; display: grid; gap: 0.85rem; }
+.home-skel { border-radius: var(--radius); background: linear-gradient(90deg, var(--rail), var(--paper), var(--rail)); background-size: 200% 100%; animation: home-skel-shine 1.4s var(--ease) infinite; }
+.home-skel-heat { height: 7.5rem; }
+.home-skel-row { display: flex; gap: 0.75rem; }
+.home-skel-row span { flex: 1; height: 9.5rem; border-radius: var(--radius); background: linear-gradient(90deg, var(--rail), var(--paper), var(--rail)); background-size: 200% 100%; animation: home-skel-shine 1.4s var(--ease) infinite; }
+.home-skel-row span:nth-child(2) { animation-delay: 120ms; }
+.home-skel-row span:nth-child(3) { animation-delay: 240ms; }
+@keyframes home-skel-shine { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+.home-role-note { margin: 0.35rem 0 0.85rem; }
+.home-sync-quiet { margin: 0.15rem 0 0.85rem; font-size: 0.8125rem; }
+.home-empty { margin: 0.35rem 0 0.9rem; padding: 0.85rem 1rem; background: color-mix(in srgb, var(--paper) 78%, transparent); border: 1px dashed var(--line); border-radius: var(--radius); }
+.home-empty .empty-desk { margin: 0; }
+.home-empty-action { margin: 0.45rem 0 0; font-size: 0.875rem; }
+.home-recent { margin-top: 0.35rem; }
+.home-note-list li { padding: 0.55rem 0.15rem; }
+.home-note-list .note-path { font-size: 0.75rem; }
+.rail { padding: 1.15rem 0.75rem 1.6rem; }
+.rail .brand { font-size: 1.05rem; letter-spacing: 0.02em; }
+.shell { padding: 1.5rem 1.85rem 3rem; }
+@media (max-width: 760px) { .home-hero { flex-wrap: wrap; } .shell { padding: 1.1rem 1.1rem 2.5rem; } }
+@media (prefers-reduced-motion: reduce) { .home-skel, .home-skel-row span { animation: none; background: var(--rail); } }

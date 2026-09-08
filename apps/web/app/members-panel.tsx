@@ -14,7 +14,7 @@ type Member = {
 export function MembersPanel({
   spaceId,
   role,
-  spaceKind = "team",
+  spaceKind = "personal",
 }: {
   spaceId: string;
   role: string;
@@ -44,26 +44,6 @@ export function MembersPanel({
     }
   }, [spaceId]);
 
-  async function onAdd(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setErr("");
-    setOk("");
-    setBusy(true);
-    const fd = new FormData(e.currentTarget);
-    try {
-      await api(`/v1/spaces/${spaceId}/members`, {
-        method: "POST",
-        body: JSON.stringify({ email: fd.get("email"), role: fd.get("role") }),
-      });
-      (e.target as HTMLFormElement).reset();
-      setOk("已添加成员");
-      await refresh();
-    } catch (er) {
-      setErr(er instanceof Error ? er.message : "添加失败");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function onCreateSub(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -135,7 +115,7 @@ export function MembersPanel({
 
   return (
     <div className="card">
-      <h2>{isPersonal ? "子账号" : "成员"}</h2>
+      <h2>子账号</h2>
       {err && <p className="err">{err}</p>}
       {ok && <p className="ok-msg">{ok}</p>}
       <ul className="list">
@@ -190,7 +170,7 @@ export function MembersPanel({
           <p className="hint" style={{ marginTop: 0 }}>
             {isPersonal
               ? "个人空间可通过子账号共享只读/编辑权限；不会为子账号再建个人空间。"
-              : "新建账号并加入本空间。已注册邮箱请用下方「添加成员」。"}
+              : "新建账号并加入本空间。"}
           </p>
           <label>邮箱</label>
           <input name="email" type="email" required placeholder="子账号邮箱" />
@@ -212,25 +192,7 @@ export function MembersPanel({
         </form>
       )}
 
-      {canManage && !isPersonal && (
-        <form className="member-add" onSubmit={onAdd}>
-          <h3 style={{ margin: "0.5rem 0 0.35rem", fontSize: "1rem" }}>添加成员</h3>
-          <p className="hint" style={{ marginTop: 0 }}>邀请已注册用户加入团队空间。</p>
-          <label>邮箱</label>
-          <input name="email" type="email" required placeholder="已注册用户的邮箱" />
-          <label>角色</label>
-          <select name="role" defaultValue="viewer">
-            <option value="owner">所有者</option>
-            <option value="editor">编辑</option>
-            <option value="viewer">只读</option>
-          </select>
-          <p>
-            <button type="submit" disabled={busy}>
-              {busy ? "添加中…" : "添加成员"}
-            </button>
-          </p>
-        </form>
-      )}
+      
     </div>
   );
 }

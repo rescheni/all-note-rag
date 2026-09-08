@@ -7,6 +7,7 @@ import { isRunInProgress, type SyncRunProgress } from "./sync-progress";
 import { Heatmap, type HeatDay, type HeatYear } from "./heatmap";
 import { prettyPath, shortPath } from "./notes/crumbs";
 import { HomeConnShelf } from "./home-conn-shelf";
+import { motion, springSoft, useReducedMotion } from "./ui-motion";
 
 type Conn = {
   id: string;
@@ -22,10 +23,14 @@ type Conn = {
 
 type Note = { id: string; title: string; path: string; updated_at: string };
 
+function pickPersonal(list: Space[]): Space | null {
+  if (!list.length) return null;
+  return list.find((s) => s.kind === "personal") ?? list[0];
+}
 
 export default function HomePage() {
+  const reduced = useReducedMotion();
   const [err, setErr] = useState("");
-  const [spaces, setSpaces] = useState<Space[]>([]);
   const [space, setSpace] = useState<Space | null>(null);
   const [conns, setConns] = useState<Conn[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -34,6 +39,7 @@ export default function HomePage() {
   const [activityYears, setActivityYears] = useState<HeatYear[]>([]);
   /** False on SSR + first client paint so auth/role UI does not hydrate-mismatch. */
   const [mounted, setMounted] = useState(false);
+  const [booting, setBooting] = useState(true);
   const pollUntilRef = useRef(0);
   pollUntilRef.current = pollUntil;
 
@@ -52,10 +58,15 @@ export default function HomePage() {
   }
 
   async function boot() {
-    const { spaces: list, current } = await loadSpaces();
-    setSpaces(list);
-    if (!current) return;
-    await loadFor(current);
+    setBooting(true);
+    try {
+      const { spaces: list } = await loadSpaces();
+      const current = pickPersonal(list);
+      if (!current) return;
+      await loadFor(current);
+    } finally {
+      setBooting(false);
+    }
   }
 
   useEffect(() => {
@@ -78,7 +89,10 @@ export default function HomePage() {
     } catch {
       /* ignore */
     }
-    boot().catch((e) => setErr(e instanceof Error ? e.message : "加载失败"));
+    boot().catch((e) => {
+      setErr(e instanceof Error ? e.message : "加载失败");
+      setBooting(false);
+    });
   }, [mounted]);
 
   const anyRunning = conns.some((c) => isRunInProgress(c.latest_run));
@@ -117,18 +131,6 @@ export default function HomePage() {
     };
   }, [space?.id, pollUntil, anyRunning]);
 
-  async function onSwitch(id: string) {
-    const next = spaces.find((s) => s.id === id);
-    if (!next) return;
-    setErr("");
-    try {
-      await loadFor(next);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "切换失败");
-    }
-  }
-
-
   async function triggerSync(id: string) {
     setErr("");
     try {
@@ -146,79 +148,100 @@ export default function HomePage() {
   }
 
   const canManageConn = space?.role === "owner" || space?.role === "editor";
+  const showLoading = !mounted || booting;
 
   return (
-    <>
-      <h1>{space ? space.name : "空间"}</h1>
-      <p className="readonly-banner">中枢只读，不写回任何源。</p>
+    <div className="home-desk">
+      <motion.header
+        className="home-hero"
+        initial={reduced ? false : { opacity: 0.72, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={springSoft}
+      >
+        <div className="home-hero-text">
+          <h1>{space ? space.name : "我的笔记"}</h1>
+          <p className="home-lede">中枢只读，不写回任何源。</p>
+        </div>
+        {space ? (
+          <span className="home-space-pill" title="个人空间">
+            <span className="hub-space-dot" aria-hidden="true" />
+            个人
+          </span>
+        ) : null}
+      </motion.header>
+
       {err && <p className="err">{err}</p>}
 
-      {spaces.length > 1 && (
-        <div className="space-bar">
-          <div>
-            <label htmlFor="space-switch">当前空间</label>
-            <select
-              id="space-switch"
-              value={space?.id ?? ""}
-              onChange={(e) => onSwitch(e.target.value)}
-            >
-              {spaces.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+      {showLoading ? (
+        <div className="home-loading" aria-busy="true" aria-live="polite">
+          <div className="home-skel home-skel-heat" />
+          <div className="home-skel-row">
+            <span /><span /><span />
           </div>
+          <p className="muted">正在铺开书桌…</p>
         </div>
-      )}
+      ) : (
+        <>
+          <Heatmap days={activity} years={activityYears} />
 
-      <Heatmap days={activity} years={activityYears} />
-
-      {/* Role / auth-dependent siblings only after mount — same tags on SSR & first paint. */}
-      {mounted && !canManageConn && space ? (
-        <p className="muted">当前账号为只读，可以浏览笔记、搜索与问答，但不能管理连接或同步。</p>
-      ) : null}
-      <section className="home-conns">
-        <div className="home-conns-head">
-          <h2>连接</h2>
-          {mounted && canManageConn ? (
-            <p className="muted home-manage-conn">
-              <Link href="/connections">管理接入 →</Link>
-            </p>
+          {mounted && !canManageConn && space ? (
+            <p className="muted home-role-note">当前账号为只读，可以浏览笔记、搜索与问答，但不能管理连接或同步。</p>
           ) : null}
-        </div>
-        {conns.length === 0 && (
-          <p className="empty-desk">
-            还没有连接。
-            {mounted && canManageConn ? (
-              <>
-                {" "}
-                <Link href="/connections">去接入管理</Link>
-              </>
-            ) : null}
-          </p>
-        )}
-        <p className="muted" style={{ marginTop: 0 }}>
-          同步方式：手动「同步」+ 对象存储变更唤醒；自动巡检约每小时一次（仅当距上次同步已超过约 1 小时）。
-        </p>
-        <HomeConnShelf conns={conns} canSync={Boolean(mounted && canManageConn)} onSync={triggerSync} />
-      </section>
 
-      <section>
-        <h2>最近笔记</h2>
-        {notes.length === 0 && <p className="empty-desk">同步后会出现最近改动的笔记。</p>}
-        <ul className="list stagger-in">
-          {notes.map((n) => (
-            <li key={n.id}>
-              <Link href={`/notes/${n.id}`}>{n.title}</Link>
-              <div className="muted note-path" title={prettyPath(n.path, n.title) || n.title}>
-                {shortPath(n.path, 2, n.title) || n.title}
+          <section className="home-conns">
+            <div className="home-conns-head">
+              <h2>连接</h2>
+              {mounted && canManageConn ? (
+                <p className="muted home-manage-conn">
+                  <Link href="/connections">管理接入 →</Link>
+                </p>
+              ) : null}
+            </div>
+            {conns.length === 0 ? (
+              <div className="home-empty">
+                <p className="empty-desk">还没有接入源。</p>
+                {mounted && canManageConn ? (
+                  <p className="home-empty-action">
+                    <Link href="/connections">去接入思源 / Obsidian / 飞书 / Notion</Link>
+                  </p>
+                ) : (
+                  <p className="muted">请所有者先接入后再回来翻阅。</p>
+                )}
               </div>
-            </li>
-          ))}
-        </ul>
-        <p><Link href="/notes">全部笔记</Link></p>
-      </section>
-    </>
+            ) : (
+              <p className="muted home-sync-quiet">
+                手动同步 · 对象存储变更会唤醒 · 过期后约每小时巡检一次
+              </p>
+            )}
+            <HomeConnShelf conns={conns} canSync={Boolean(mounted && canManageConn)} onSync={triggerSync} />
+          </section>
+
+          <section className="home-recent">
+            <div className="home-conns-head">
+              <h2>最近笔记</h2>
+              <p className="muted">
+                <Link href="/notes">全部笔记 →</Link>
+              </p>
+            </div>
+            {notes.length === 0 ? (
+              <div className="home-empty">
+                <p className="empty-desk">同步后，最近改动的笔记会出现在这里。</p>
+              </div>
+            ) : (
+              <ul className="list stagger-in home-note-list">
+                {notes.map((n) => (
+                  <li key={n.id}>
+                    <Link href={`/notes/${n.id}`}>{n.title}</Link>
+                    <div className="muted note-path" title={prettyPath(n.path, n.title) || n.title}>
+                      {shortPath(n.path, 2, n.title) || n.title}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </>
+      )}
+    </div>
   );
 }

@@ -180,7 +180,7 @@ export function Nav() {
           {authed ? (
             <>
               <NavLink href="/" icon={<IconSpace />} onNavigate={closeMenu}>
-                空间
+                首页
               </NavLink>
               <NavLink href="/notes" icon={<IconNotes />} onNavigate={closeMenu}>
                 笔记

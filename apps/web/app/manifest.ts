@@ -8,7 +8,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "笔记中枢",
     short_name: "笔记中枢",
-    description: "个人笔记与团队文档只读聚合层",
+    description: "个人只读笔记中枢，聚合多源笔记",
     start_url: "/",
     scope: "/",
     display: "standalone",
