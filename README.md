@@ -47,9 +47,45 @@ Optional: OpenAI-compatible chat endpoint, Notion/Feishu OAuth, local embed prov
 Auth: login JWT, hub_ token, or HTTP Basic. MCP at /v1/mcp (Bearer hub_…). Details: docs/MCP.md.
 Self-host: point MCP URL at your own host (any public hostname in docs is an example only).
 
-## CI images
+## 镜像与 Release
 
-Workflow: .github/workflows/docker.yml — builds note-hub-api/worker/web to ghcr.io/<owner>/… on master/main and v* tags; PRs build-only.
+推送到 `master` / `main` 会构建并推送 GHCR 镜像；打 `v*` 标签（例如 `v0.1.0`）还会在构建成功后自动创建 **GitHub Release**（含更新说明 + 拉取命令）。
+
+| 镜像 | 地址 |
+|------|------|
+| API | `ghcr.io/rescheni/note-hub-api` |
+| Worker | `ghcr.io/rescheni/note-hub-worker` |
+| Web | `ghcr.io/rescheni/note-hub-web` |
+
+标签：`latest`（默认分支最新成功构建）、`vX.Y.Z` / `X.Y.Z`（semver）、以及短 commit sha。
+
+```bash
+# 拉指定版本
+docker pull ghcr.io/rescheni/note-hub-api:0.1.0
+docker pull ghcr.io/rescheni/note-hub-worker:0.1.0
+docker pull ghcr.io/rescheni/note-hub-web:0.1.0
+
+# 或用 compose 直接跑预构建镜像（数据仍在 ./DATA）
+cp .env.example .env   # 设置强 HUB_SECRET
+export NOTE_HUB_TAG=0.1.0
+docker compose -f docker-compose.ghcr.yml up -d
+```
+
+发版示例：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+# Actions 构建镜像 → 创建 Release（Notes + pull 说明）
+```
+
+**可见性**：私有仓库也能发 Release / 推包。若希望别人**免登录** `docker pull`，请把三个 Container package 设为 Public（Package settings → Change visibility），或把仓库改为 Public。CI 会尝试自动设为 public（失败时需手动点一次）。私有包需：
+
+```bash
+echo $GHCR_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USER --password-stdin
+```
+
+Workflow：`.github/workflows/docker.yml`
 
 ## Docs
 

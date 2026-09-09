@@ -74,3 +74,120 @@ jobs:
           build-args: ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # Best-effort: make GHCR package public so anonymous docker pull works.
+      # Requires package to exist; fails soft if visibility API is unavailable.
+      - name: Make GHCR package public
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          PKG="${{ matrix.image_suffix }}"
+          # user vs org package endpoints
+          for path in \
+            "user/packages/container/${PKG}/visibility" \
+            "orgs/${OWNER}/packages/container/${PKG}/visibility"; do
+            if gh api --method PUT "$path" -f visibility=public >/dev/null 2>&1; then
+              echo "Set $PKG public via $path"
+              exit 0
+            fi
+          done
+          echo "::warning::Could not set $PKG public automatically. Set Package settings → Change visibility → Public (or make the repo public)."
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Version from tag
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          OWNER="${{ github.repository_owner }}"
+          echo "owner=${OWNER}" >> "$GITHUB_OUTPUT"
+          echo "api=ghcr.io/${OWNER}/note-hub-api:${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "worker=ghcr.io/${OWNER}/note-hub-worker:${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "web=ghcr.io/${OWNER}/note-hub-web:${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release notes body
+        id: notes
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          IMG_API: ${{ steps.ver.outputs.api }}
+          IMG_WORKER: ${{ steps.ver.outputs.worker }}
+          IMG_WEB: ${{ steps.ver.outputs.web }}
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          {
+            echo "## 笔记中枢 ${TAG}"
+            echo
+            if [ -n "$PREV" ]; then
+              echo "### 更新内容（自 ${PREV}）"
+              echo
+              git log --pretty=format:'- %s (%h)' "${PREV}..${TAG}"
+              echo
+              echo
+            else
+              echo "### 更新内容"
+              echo
+              echo "首个带镜像的发布标签。"
+              echo
+            fi
+            echo "### 拉取镜像"
+            echo
+            echo '```bash'
+            echo "docker pull ${IMG_API}"
+            echo "docker pull ${IMG_WORKER}"
+            echo "docker pull ${IMG_WEB}"
+            echo '```'
+            echo
+            echo "或使用 \`latest\`（跟随默认分支最新成功构建）："
+            echo
+            echo '```bash'
+            echo "docker pull ghcr.io/${{ github.repository_owner }}/note-hub-api:latest"
+            echo "docker pull ghcr.io/${{ github.repository_owner }}/note-hub-worker:latest"
+            echo "docker pull ghcr.io/${{ github.repository_owner }}/note-hub-web:latest"
+            echo '```'
+            echo
+            echo "### 用预构建镜像启动"
+            echo
+            echo '```bash'
+            echo "cp .env.example .env   # 设置强 HUB_SECRET"
+            echo "export NOTE_HUB_TAG=${VERSION}"
+            echo "docker compose -f docker-compose.ghcr.yml up -d"
+            echo '```'
+            echo
+            echo "若 \`docker pull\` 要求登录：把三个 GHCR package 设为 **Public**，或："
+            echo
+            echo '```bash'
+            echo "echo \$GHCR_TOKEN | docker login ghcr.io -u USERNAME --password-stdin"
+            echo '```'
+            echo
+            echo "仓库：[${{ github.repository }}](https://github.com/${{ github.repository }})"
+          } > /tmp/release-body.md
+          echo "path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Note Hub ${{ steps.ver.outputs.tag }}
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.ver.outputs.tag, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
