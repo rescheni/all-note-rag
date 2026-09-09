@@ -114,6 +114,18 @@ export function IconAsk() {
   );
 }
 
+export function IconGrowth() {
+  return (
+    <Svg>
+      <Stroke d="M8 13.5 V6" />
+      <Stroke d="M8 8.5 C8 8.5 5 8.5 5 5.5" />
+      <Stroke d="M8 7 C8 7 11 7.2 11.2 4.2" />
+      <Stroke d="M4 13.5 H12" />
+    </Svg>
+  );
+}
+
+
 export function IconMeetings() {
   return (
     <Svg>
