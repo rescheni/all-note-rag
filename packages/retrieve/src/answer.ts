@@ -116,10 +116,73 @@ export function uniqueRetrieveHits(hits: RetrieveHit[]): RetrieveHit[] {
   return out;
 }
 
+/** True if a line looks like a footnote / sources-list entry (【n】…). */
+function isCiteListingLine(line: string): boolean {
+  const t = line.trim();
+  if (!t) return true;
+  if (/^(?:[-*•]|\d+[.)、])?\s*【\d+】/.test(t)) return true;
+  if (/^(?:【\d+】\s*)+$/.test(t)) return true;
+  // Short 【n】… listing row (title / quote stub), not a full prose sentence
+  if (/^【\d+】/.test(t) && t.length < 120) return true;
+  return false;
+}
+
+function isMostlyCiteListing(lines: string[]): boolean {
+  const nonempty = lines.filter((l) => l.trim());
+  if (!nonempty.length) return true;
+  const listing = nonempty.filter((l) => isCiteListingLine(l));
+  return listing.length / nonempty.length >= 0.6;
+}
+
+/**
+ * Remove trailing 来源/参考/参考文献 blocks (and bare 【n】 listing runs) that
+ * duplicate the UI sources panel. Inline mid-sentence 【n】 are preserved.
+ */
+function stripTrailingCiteDump(markdown: string): string {
+  const lines = markdown.split("\n");
+  let cutAt = lines.length;
+
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i]!.trim();
+    if (/^(#{1,3}\s*)?(?:来源|参考资料|参考文献|参考|Sources|References)\s*[:：]?$/i.test(t)) {
+      const rest = lines.slice(i + 1);
+      if (isMostlyCiteListing(rest)) {
+        cutAt = i;
+        break;
+      }
+    }
+  }
+
+  if (cutAt === lines.length) {
+    // Trailing run of ≥2 cite-listing lines (no heading)
+    let j = lines.length - 1;
+    while (j >= 0 && !lines[j]!.trim()) j--;
+    const end = j;
+    while (j >= 0 && lines[j]!.trim() && isCiteListingLine(lines[j]!)) {
+      j--;
+      while (j >= 0 && !lines[j]!.trim()) j--;
+    }
+    let start = j + 1;
+    while (start < lines.length && !lines[start]!.trim()) start++;
+    const listing = lines.slice(start, end + 1).filter((l) => l.trim());
+    if (
+      listing.length >= 2 &&
+      listing.every((l) => isCiteListingLine(l)) &&
+      start > 0
+    ) {
+      cutAt = start;
+      while (cutAt > 0 && !lines[cutAt - 1]!.trim()) cutAt--;
+    }
+  }
+
+  return lines.slice(0, cutAt).join("\n");
+}
+
 /**
  * Deterministic post-process for LLM answers:
  * - normalize common cite variants to 【n】
  * - drop 【k】 outside 1..N (and orphan fake footnote lines)
+ * - strip trailing 来源/参考 dumps that duplicate the UI sources panel
  * - optionally repack cited hits to dense 1..M so UI never shows gaps
  */
 export function sanitizeAnswerCitations(
@@ -137,6 +200,10 @@ export function sanitizeAnswerCitations(
   text = text.replace(/［\s*(\d{1,2})\s*］/g, (_m, d: string) => `【${Number(d)}】`);
   // [7] but not markdown links [label](url)
   text = text.replace(/(?<![\w`\\])\[(\d{1,2})\](?!\()/g, (_m, d: string) => `【${Number(d)}】`);
+
+  // Drop trailing 「来源/参考」 dumps (AI often appends a sources list under the answer).
+  // Keep inline mid-sentence 【n】; only strip end blocks that are mostly listing lines.
+  text = stripTrailingCiteDump(text);
 
   if (N <= 0) {
     text = text.replace(/【\d+】/g, "");
@@ -307,6 +374,7 @@ async function callChat(query: string, hits: RetrieveHit[], chat: ChatConfig): P
               "笔记片段是参考材料，用来辅助思考与作答，不是唯一合法答案来源，也不是闭卷考试。\n" +
               "请综合片段中的观点、语境，并结合合理常识给出有帮助的回答；可以适度推理与概括。\n" +
               "优先呼应、引用相关片段：文中只能用提供列表里的【编号】标出依据（例如【1】），禁止编造超出列表的编号，也不要另起脚注数字行。\n" +
+              "不要在文末另列「来源/参考文献」清单，来源由界面展示。\n" +
               "片段若只是提问、残缺或弱相关，仍应尽力给出有用回答，并可说明「依据笔记较少，以下结合相关讨论与一般理解」。\n" +
               "不要因为片段里没有「标准定义句」就拒绝回答。\n" +
               "仅当片段与问题完全无关、且无法形成任何有意义回答时，才回复：不知道。\n" +

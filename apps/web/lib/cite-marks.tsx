@@ -67,8 +67,12 @@ export function splitCiteMarks(
   keyPrefix: string,
 ): ReactNode[] {
   if (!text) return [];
-  if (!citations?.length || !/【\d+】/.test(text)) {
+  if (!/【\d+】/.test(text)) {
     return [text];
+  }
+  // No cite list (history gap / empty) — strip raw 【n】 so they never paint as ugly text.
+  if (!citations?.length) {
+    return [text.replace(/【\d+】/g, "")];
   }
   const out: ReactNode[] = [];
   let last = 0;

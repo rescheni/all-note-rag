@@ -83,6 +83,32 @@ describe("sanitizeAnswerCitations", () => {
     expect(out.citations).toHaveLength(2);
     expect(out.answer_markdown).toBe("没有引用的回答。");
   });
+
+  it("strips trailing 来源/参考文献 dump but keeps inline 【n】", () => {
+    const citations = [1, 2, 3].map(cite);
+    const raw = [
+      "二叉树是一种树形结构。【1】也可递归定义。【2】",
+      "",
+      "## 来源",
+      "【1】标题1",
+      "【2】标题2",
+      "【3】标题3",
+    ].join("\n");
+    const out = sanitizeAnswerCitations(raw, citations);
+    expect(out.answer_markdown).toContain("【1】");
+    expect(out.answer_markdown).toContain("也可递归定义");
+    expect(out.answer_markdown).not.toContain("## 来源");
+    expect(out.answer_markdown).not.toMatch(/【1】标题1/);
+  });
+
+  it("strips trailing bare 【n】 listing lines without a heading", () => {
+    const citations = [1, 2].map(cite);
+    const raw = "正文结论如下。【1】\n\n【1】标题1\n【2】标题2";
+    const out = sanitizeAnswerCitations(raw, citations);
+    expect(out.answer_markdown).toContain("正文结论如下。【1】");
+    expect(out.answer_markdown).not.toContain("标题1");
+    expect(out.answer_markdown).not.toContain("标题2");
+  });
 });
 
 describe("composeAskAnswer citation sanitize", () => {

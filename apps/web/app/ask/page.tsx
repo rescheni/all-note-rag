@@ -285,6 +285,7 @@ function CitationsBlock({
   scanning,
   activeIndex,
   forceOpen,
+  forceCollapsed,
   query,
   picking,
   selectedNoteIds,
@@ -303,6 +304,8 @@ function CitationsBlock({
   activeIndex?: number;
   /** While scanning / picking, keep body open */
   forceOpen?: boolean;
+  /** When showing answer / history: collapse stack even if pref is stale */
+  forceCollapsed?: boolean;
   /** Original question — for weak-evidence hint */
   query?: string | null;
   picking?: boolean;
@@ -317,20 +320,42 @@ function CitationsBlock({
   pickLocked?: boolean;
 }) {
   const [prefOpen, setPrefOpen] = useSourcesOpenPref();
+  const [userOpened, setUserOpened] = useState(false);
   const wasScanning = useRef(false);
-  // Never auto-open on cite hover / activeN — only scan/pick forceOpen or user pref.
-  const open = forceOpen || scanning || picking ? true : prefOpen;
+  const wasPicking = useRef(false);
+  // Scan/pick force open. forceCollapsed folds immediately (same render); userOpened allows re-expand.
+  const open =
+    forceOpen || scanning || picking
+      ? true
+      : userOpened
+        ? true
+        : forceCollapsed
+          ? false
+          : prefOpen;
   const panelId = useId();
   const { activeN } = useCiteActive();
   const cardRefs = useRef<Map<number, HTMLElement>>(new Map());
 
   useEffect(() => {
-    // Fold only after leaving scan into answer — not when entering pick.
-    if (wasScanning.current && !scanning && !picking) {
+    // Fold when entering answer: leaving pick, OR leaving scan without entering pick.
+    // (retrieve→pick clears wasScanning; without wasPicking the fold never ran.)
+    if (wasPicking.current && !picking) {
       setPrefOpen(false);
+      setUserOpened(false);
+    } else if (wasScanning.current && !scanning && !picking) {
+      setPrefOpen(false);
+      setUserOpened(false);
     }
     wasScanning.current = Boolean(scanning);
+    wasPicking.current = Boolean(picking);
   }, [scanning, picking, setPrefOpen]);
+
+  useEffect(() => {
+    if (forceCollapsed) {
+      setPrefOpen(false);
+      setUserOpened(false);
+    }
+  }, [forceCollapsed, setPrefOpen]);
 
   // Only scroll when the accordion is already open — never while collapsed
   // (scrollIntoView on collapsed/hidden cards reflows and feeds hover flicker).
@@ -423,7 +448,11 @@ function CitationsBlock({
           aria-expanded={open}
           aria-controls={panelId}
           disabled={Boolean(forceOpen || scanning || picking)}
-          onClick={() => setPrefOpen(!prefOpen)}
+          onClick={() => {
+            const next = !open;
+            setPrefOpen(next);
+            setUserOpened(next);
+          }}
         >
           <span className="ask-cites-chevron" aria-hidden="true" data-open={open ? "1" : "0"} />
           <span className="ask-cites-h">来源</span>
@@ -602,6 +631,7 @@ function AssistantBody({
   onCancelPick,
   generateDisabled,
   pickLocked,
+  forceCollapsed,
 }: {
   content: string | null;
   citations: Citation[];
@@ -624,32 +654,37 @@ function AssistantBody({
   onCancelPick?: () => void;
   generateDisabled?: boolean;
   pickLocked?: boolean;
+  /** Collapse source card stack (answer / history). */
+  forceCollapsed?: boolean;
 }) {
   const displayCites =
     displayCitations ?? selectDisplayCitations(citations, content);
+  // Answer / history: keep stack folded. Scan→pick stays open for checkboxes.
+  const collapseStack =
+    forceCollapsed ?? Boolean(content != null && !scanning && !picking);
   return (
     <CiteActiveProvider>
       <div className="ask-assistant-stack">
-        {/* 检索永远在上：不要把「回答来自…」放在来源前面，否则看起来像来源在下面 */}
-        {scanning ? (
-          <p className="ask-mode-pill muted" aria-live="polite">
-            正在搜寻相关笔记…
-          </p>
-        ) : picking ? (
-          <p className="ask-mode-pill muted" aria-live="polite">
-            请勾选要纳入回答的笔记
-          </p>
-        ) : null}
-
-        {displayCites.length || picking ? (
+        {/* DOM order: 检索 (order:1) then 回答 (order:2). Pick bar lives INSIDE cites. */}
+        {displayCites.length || picking || scanning ? (
           <section className="ask-section ask-section-cites" aria-label="检索来源">
             <p className="ask-section-label">检索</p>
+            {scanning ? (
+              <p className="ask-mode-pill muted" aria-live="polite">
+                正在搜寻相关笔记…
+              </p>
+            ) : picking ? (
+              <p className="ask-mode-pill muted" aria-live="polite">
+                请勾选要纳入回答的笔记
+              </p>
+            ) : null}
             <CitationsBlock
               citations={displayCites}
               reduced={reduced}
               scanning={scanning}
               activeIndex={activeIndex}
               forceOpen={Boolean(scanning || picking)}
+              forceCollapsed={collapseStack}
               query={query}
               picking={picking}
               selectedNoteIds={selectedNoteIds}
