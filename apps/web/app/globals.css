@@ -1182,8 +1182,10 @@ blockquote.ask-quote {
   gap: 0.35rem;
   min-width: 0;
 }
-.ask-section-cites { order: 0; }
-.ask-section-answer { order: 1; }
+.ask-section-cites { order: 1 !important; }
+.ask-section-answer { order: 2 !important; }
+.ask-assistant-stack > .ask-mode-pill { order: 0; } /* scanning status only */
+.ask-assistant-stack > .hub-inline-empty { order: 1; }
 .ask-section-label {
   margin: 0;
   font-size: 0.6875rem;

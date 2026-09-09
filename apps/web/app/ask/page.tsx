@@ -448,15 +448,8 @@ function AssistantBody({
   return (
     <CiteActiveProvider>
       <div className="ask-assistant-stack">
-        {aiFailed && !scanning ? (
-          <p className="ask-ai-failed" role="status">
-            {`AI 未能生成（${aiError || "未知原因"}）. 以下为检索摘录。`}
-          </p>
-        ) : mode && !scanning ? (
-          <p className="ask-mode-pill muted">
-            {mode === "ai" ? "回答来自大模型（附引用）" : "回答为本地抽取（未走大模型）"}
-          </p>
-        ) : scanning ? (
+        {/* 检索永远在上：不要把「回答来自…」放在来源前面，否则看起来像来源在下面 */}
+        {scanning ? (
           <p className="ask-mode-pill muted" aria-live="polite">
             正在搜寻相关笔记…
           </p>
@@ -475,12 +468,21 @@ function AssistantBody({
             />
           </section>
         ) : !scanning && content != null ? (
-          <p className="hub-inline-empty muted">笔记里没有直接依据可点的来源。</p>
+          <p className="hub-inline-empty muted ask-section-cites">笔记里没有直接依据可点的来源。</p>
         ) : null}
 
         {content != null && !scanning ? (
           <section className="ask-section ask-section-answer" aria-label="回答">
             <p className="ask-section-label">回答</p>
+            {aiFailed ? (
+              <p className="ask-ai-failed" role="status">
+                {`AI 未能生成（${aiError || "未知原因"}）. 以下为检索摘录。`}
+              </p>
+            ) : mode ? (
+              <p className="ask-mode-pill muted">
+                {mode === "ai" ? "回答来自大模型（附引用）" : "回答为本地抽取（未走大模型）"}
+              </p>
+            ) : null}
             <motion.article
               className="ask-answer-paper"
               initial={reduced ? false : { opacity: 0, y: 14 }}
