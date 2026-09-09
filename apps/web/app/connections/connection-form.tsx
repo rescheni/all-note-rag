@@ -112,10 +112,6 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
   const [oauthBusy, setOauthBusy] = useState(false);
   const [oauthReady, setOauthReady] = useState<boolean | null>(null);
   const [showFeishuEmbed, setShowFeishuEmbed] = useState(false);
-  const [contactsBusy, setContactsBusy] = useState(false);
-  const [contactsSync, setContactsSync] = useState<ContactsSyncSnapshot | null>(
-    connection?.config?.contacts_sync ?? null,
-  );
   const [savedId, setSavedId] = useState(connection?.id ?? "");
   const [run, setRun] = useState<SyncRunProgress | null>(connection?.latest_run ?? null);
   const [pollUntil, setPollUntil] = useState(0);
@@ -795,49 +791,6 @@ export function ConnectionForm({ variant, source: sourceProp = "", connection, s
               </div>
             </details>
           </section>
-          {false && editing && connId && (
-            <section className="form-section">
-              <h2>通讯录</h2>
-              <p className="hint">
-                按邮箱匹配已注册的中枢用户，加入本空间（默认只读）。不创建无邮箱账号，不改已有角色，不删除手工成员。
-              </p>
-              <p className="muted">
-                {contactsSync?.last_at
-                  ? `上次同步：匹配 ${contactsSync.matched ?? 0} 人，新增 ${contactsSync.added ?? 0} 人，跳过 ${contactsSync.skipped ?? 0} 人 · ${new Date(contactsSync.last_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`
-                  : "尚未同步通讯录"}
-              </p>
-              {contactsSync?.error && <p className="err">{contactsSync.error}</p>}
-              <div className="form-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={contactsBusy || !canEdit}
-                  onClick={async () => {
-                    setErr("");
-                    setMsg("");
-                    setContactsBusy(true);
-                    try {
-                      const r = await api<{ contacts_sync: ContactsSyncSnapshot }>(
-                        `/v1/connections/${connId}/contacts/sync`,
-                        { method: "POST" },
-                      );
-                      setContactsSync(r.contacts_sync);
-                      setMsg(
-                        `通讯录已同步：匹配 ${r.contacts_sync.matched ?? 0} 人，新增 ${r.contacts_sync.added ?? 0} 人。`,
-                      );
-                    } catch (er) {
-                      const ex = er as Error & { code?: string };
-                      setErr((ex.code ? `${ex.code}: ` : "") + (ex instanceof Error ? ex.message : "同步通讯录失败"));
-                    } finally {
-                      setContactsBusy(false);
-                    }
-                  }}
-                >
-                  {contactsBusy ? "同步中…" : "同步通讯录"}
-                </button>
-              </div>
-            </section>
-          )}
           <div className="form-actions">
             <button type="submit" className="secondary" disabled={busy || !canEdit}>
               {busy ? "保存中…" : "保存并同步"}

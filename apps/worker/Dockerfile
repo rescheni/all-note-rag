@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # context: repo root
-FROM node:20-bookworm-slim AS base
+FROM node:22-bookworm-slim AS base
 RUN set -eux; for i in 1 2 3 4 5; do apt-get update && break || sleep 4; done; apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng poppler-utils antiword ca-certificates && rm -rf /var/lib/apt/lists/* && tesseract --list-langs && tesseract --list-langs 2>/dev/null | grep -E '^(eng|chi_sim)$'
 ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate

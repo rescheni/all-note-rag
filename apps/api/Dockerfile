@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # context: repo root
-FROM node:20-bookworm-slim AS base
+FROM node:22-bookworm-slim AS base
 RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
