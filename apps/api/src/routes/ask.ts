@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import {
   ChatUpstreamError,
+  citationsFromHits,
   composeAskAnswer,
   composeExtractiveAnswer,
   embedTexts,
@@ -8,6 +9,7 @@ import {
   loadChunksViaSql,
   loadVectorChunksViaSql,
   shortAiError,
+  uniqueRetrieveHits,
   UNKNOWN_ANSWER,
 } from "@note-hub/retrieve";
 import {
@@ -202,13 +204,20 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
   const denied = roleDenied(c, gate);
   if (denied) return denied;
 
-  let body: { query?: unknown; q?: unknown; note_ids?: unknown; thread_id?: unknown } = {};
+  let body: {
+    query?: unknown;
+    q?: unknown;
+    note_ids?: unknown;
+    thread_id?: unknown;
+    generate?: unknown;
+  } = {};
   try {
     body = (await c.req.json()) as {
       query?: unknown;
       q?: unknown;
       note_ids?: unknown;
       thread_id?: unknown;
+      generate?: unknown;
     };
   } catch {
     body = {};
@@ -219,13 +228,15 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
   const noteIds = Array.isArray(body.note_ids)
     ? body.note_ids.filter((id): id is string => typeof id === "string")
     : undefined;
+  // Default true when omitted — retrieve-only when explicitly false.
+  const generate = body.generate === false ? false : true;
   const threadIdRaw = typeof body.thread_id === "string" ? body.thread_id.trim() : "";
   if (threadIdRaw && !isUuid(threadIdRaw)) {
     return jsonError(c, 400, "invalid_request", "无效的对话 id");
   }
 
   let thread: ThreadRow | null = null;
-  if (threadIdRaw) {
+  if (threadIdRaw && generate) {
     thread = await loadThread(spaceId, user.id, threadIdRaw);
     if (!thread) return errors.notFound(c, "对话不存在");
   }
@@ -249,17 +260,31 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
       console.error(JSON.stringify({ level: "error", message: "embed query failed", error: String(e) }));
     }
   }
-  const [retrieved, growthSummary, writingSummary] = await Promise.all([
-    hybridRetrieve(spaceId, q, {
-      noteIds,
-      loadChunks,
-      loadVectorChunks,
-      queryEmbedding,
-      userId: user.id,
-      role: gate.mem.role,
-    ,
-      limit: 12,
-    }),
+
+  const retrieved = await hybridRetrieve(spaceId, q, {
+    noteIds,
+    loadChunks,
+    loadVectorChunks,
+    queryEmbedding,
+    userId: user.id,
+    role: gate.mem.role,
+    limit: 12,
+  });
+
+  // Retrieve-only: citations for user pick — no compose, no persist, no skill hooks.
+  if (!generate) {
+    const citations = citationsFromHits(uniqueRetrieveHits(retrieved.hits));
+    return c.json({
+      answer_markdown: "",
+      citations,
+      mode: "retrieve",
+      retrieve_only: true,
+      unknown: retrieved.unknown,
+      ai_configured: Boolean(chat),
+    });
+  }
+
+  const [growthSummary, writingSummary] = await Promise.all([
     growthOnAsk(spaceId, user.id, q),
     writingHealthOnAsk(spaceId, user.id, q),
   ]);

@@ -552,11 +552,11 @@ button:hover, .btn:hover {
   color: var(--on-accent);
   box-shadow: 0 6px 16px rgba(94, 138, 104, 0.22);
 }
-button:hover:not(.secondary):not(.linkish):not(.tree-row):not(.tree-twist-btn):not(.nav-exit):not(.source-section-head):not(.conn-fold):not(.source-book):not(.ask-thread-del):not(.cite-mark):not(.ask-confirm-danger):not(.ask-cites-toggle):not(.ask-new-btn),
+button:hover:not(.secondary):not(.linkish):not(.tree-row):not(.tree-twist-btn):not(.nav-exit):not(.source-section-head):not(.conn-fold):not(.source-book):not(.ask-thread-del):not(.cite-mark):not(.ask-confirm-danger):not(.ask-cites-toggle):not(.ask-new-btn):not(.ask-pick-btn),
 .btn:hover:not(.secondary) {
   transform: translateY(-1px);
 }
-button:active:not(.secondary):not(.linkish):not(.tree-row):not(.tree-twist-btn):not(.nav-exit):not(.source-section-head):not(.conn-fold):not(.source-book):not(.ask-thread-del):not(.cite-mark):not(.ask-confirm-danger):not(.ask-cites-toggle):not(.ask-new-btn),
+button:active:not(.secondary):not(.linkish):not(.tree-row):not(.tree-twist-btn):not(.nav-exit):not(.source-section-head):not(.conn-fold):not(.source-book):not(.ask-thread-del):not(.cite-mark):not(.ask-confirm-danger):not(.ask-cites-toggle):not(.ask-new-btn):not(.ask-pick-btn),
 .btn:active:not(.secondary) {
   transform: scale(0.97);
   background: #466e50;
@@ -1041,6 +1041,94 @@ iframe.preview, .preview-frame {
 }
 .cite-card-foot {
   padding: 0 0.95rem 0.65rem;
+}
+
+/* Ask pick-notes: checkbox + toolbar (warm paper + matcha) */
+.cite-card {
+  position: relative;
+}
+.cite-card-check {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0.15rem;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.cite-card-check input {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.cite-card-check:hover {
+  background: color-mix(in srgb, var(--moss-wash) 70%, transparent);
+}
+.cite-card-excluded {
+  border-color: color-mix(in srgb, var(--line) 90%, transparent);
+  box-shadow: none;
+  background: color-mix(in srgb, var(--paper) 92%, var(--muted));
+}
+.cite-card-excluded .cite-card-head h3,
+.cite-card-excluded .ask-quote {
+  color: color-mix(in srgb, var(--ink) 45%, var(--muted));
+}
+.cite-card:has(.cite-card-check) .cite-card-main {
+  padding-right: 2.4rem;
+}
+.ask-pick-bar {
+  margin: 0.55rem 0 0.15rem;
+  padding: 0.65rem 0.7rem 0.55rem;
+  border-radius: calc(var(--radius) + 2px);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  background: color-mix(in srgb, var(--moss-wash) 35%, var(--paper));
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.ask-pick-hint {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+.ask-pick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.55rem;
+}
+.ask-pick-btn {
+  margin: 0;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8125rem;
+  border-radius: 999px;
+}
+.ask-pick-btn.secondary {
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  box-shadow: none;
+}
+.ask-pick-btn.secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--moss-wash) 55%, var(--paper));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  color: var(--ink);
+  box-shadow: none;
+  transform: none;
+}
+.ask-pick-count {
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  margin-right: auto;
+}
+.ask-pick-actions .signature {
+  margin-left: 0;
 }
 blockquote.ask-quote {
   margin: 0.45rem 0 0;

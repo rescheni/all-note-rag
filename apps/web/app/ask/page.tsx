@@ -33,11 +33,12 @@ type AskOut = {
   answer_markdown: string;
   citations: Citation[];
   unknown?: boolean;
-  mode?: "ai" | "extractive";
+  mode?: "ai" | "extractive" | "retrieve";
   ai_configured?: boolean;
   ai_failed?: boolean;
   ai_error?: string;
   thread_id?: string;
+  retrieve_only?: boolean;
 };
 
 type Thread = {
@@ -58,7 +59,7 @@ type ChatMessage = {
   created_at: string;
 };
 
-/** In-flight reveal after ask returns: index sources, then show answer. */
+/** In-flight reveal: retrieve scan → pick notes → generate answer. */
 type RevealState = {
   id: string;
   /** Full citation list for 【n】 marks in the answer. */
@@ -71,8 +72,12 @@ type RevealState = {
   mode?: string | null;
   ai_failed?: boolean;
   ai_error?: string | null;
-  phase: "retrieve" | "answer";
+  phase: "retrieve" | "pick" | "answer";
   activeIndex: number;
+  /** note_id → include in generate (default all true after retrieve). */
+  selectedNoteIds: Record<string, boolean>;
+  pendingQuery?: string;
+  optimisticUserId?: string;
 };
 
 const ASK_TIMEOUT_MS = 180_000;
@@ -204,28 +209,39 @@ function isWeakEvidence(query: string | null | undefined, citations: DisplayCita
   return best < 0.28 || citations.length <= 1;
 }
 
-function AskRetrievePipeline({ reduced }: { reduced: boolean | null }) {
+function AskRetrievePipeline({
+  reduced,
+  mode = "generate",
+}: {
+  reduced: boolean | null;
+  /** retrieve: stop at 对照相关片段; generate: include 生成回答 */
+  mode?: "retrieve" | "generate";
+}) {
+  const stages =
+    mode === "retrieve"
+      ? PIPELINE_STAGES.filter((s) => s.id !== "answer")
+      : PIPELINE_STAGES;
   const [stage, setStage] = useState(0);
   useEffect(() => {
     if (reduced) {
-      setStage(PIPELINE_STAGES.length - 1);
+      setStage(stages.length - 1);
       return;
     }
     setStage(0);
     const timers: ReturnType<typeof setTimeout>[] = [];
-    for (let i = 1; i < PIPELINE_STAGES.length; i++) {
+    for (let i = 1; i < stages.length; i++) {
       timers.push(setTimeout(() => setStage(i), PIPELINE_STEP_MS * i));
     }
     return () => {
       for (const t of timers) clearTimeout(t);
     };
-  }, [reduced]);
+  }, [reduced, mode, stages.length]);
 
   return (
     <div className="ask-pipeline" aria-busy="true" aria-live="polite">
-      <p className="ask-pipeline-kicker">检索过程</p>
+      <p className="ask-pipeline-kicker">{mode === "retrieve" ? "检索过程" : "生成过程"}</p>
       <ol className="ask-pipeline-steps">
-        {PIPELINE_STAGES.map((s, i) => {
+        {stages.map((s, i) => {
           const state = i < stage ? "done" : i === stage ? "active" : "pending";
           return (
             <li key={s.id} className={`ask-pipeline-step ask-pipeline-step-${state}`} data-state={state}>
@@ -237,7 +253,7 @@ function AskRetrievePipeline({ reduced }: { reduced: boolean | null }) {
           );
         })}
       </ol>
-      <p className="ask-pipeline-hint muted">{PIPELINE_STAGES[Math.min(stage, PIPELINE_STAGES.length - 1)].label}…</p>
+      <p className="ask-pipeline-hint muted">{stages[Math.min(stage, stages.length - 1)].label}…</p>
     </div>
   );
 }
@@ -270,32 +286,51 @@ function CitationsBlock({
   activeIndex,
   forceOpen,
   query,
+  picking,
+  selectedNoteIds,
+  onToggleNote,
+  onSelectAll,
+  onSelectNone,
+  onConfirmGenerate,
+  onCancelPick,
+  generateDisabled,
+  pickLocked,
 }: {
   citations: DisplayCitation[];
   reduced: boolean | null;
   /** Step-through retrieve animation */
   scanning?: boolean;
   activeIndex?: number;
-  /** While scanning, keep body open */
+  /** While scanning / picking, keep body open */
   forceOpen?: boolean;
   /** Original question — for weak-evidence hint */
   query?: string | null;
+  picking?: boolean;
+  selectedNoteIds?: Record<string, boolean>;
+  onToggleNote?: (noteId: string) => void;
+  onSelectAll?: () => void;
+  onSelectNone?: () => void;
+  onConfirmGenerate?: () => void;
+  onCancelPick?: () => void;
+  generateDisabled?: boolean;
+  /** True while generate request in flight */
+  pickLocked?: boolean;
 }) {
   const [prefOpen, setPrefOpen] = useSourcesOpenPref();
   const wasScanning = useRef(false);
-  // Never auto-open on cite hover / activeN — only scan forceOpen or user pref.
-  const open = forceOpen || scanning ? true : prefOpen;
+  // Never auto-open on cite hover / activeN — only scan/pick forceOpen or user pref.
+  const open = forceOpen || scanning || picking ? true : prefOpen;
   const panelId = useId();
   const { activeN } = useCiteActive();
   const cardRefs = useRef<Map<number, HTMLElement>>(new Map());
 
   useEffect(() => {
-    if (wasScanning.current && !scanning) {
-      // Search-find effect done → fold sources away above the answer.
+    // Fold only after leaving scan into answer — not when entering pick.
+    if (wasScanning.current && !scanning && !picking) {
       setPrefOpen(false);
     }
     wasScanning.current = Boolean(scanning);
-  }, [scanning, setPrefOpen]);
+  }, [scanning, picking, setPrefOpen]);
 
   // Only scroll when the accordion is already open — never while collapsed
   // (scrollIntoView on collapsed/hidden cards reflows and feeds hover flicker).
@@ -307,6 +342,29 @@ function CitationsBlock({
   }, [activeN, scanning, open]);
 
   if (!citations.length) {
+    if (picking) {
+      return (
+        <div className="ask-cites">
+          <p className="hub-inline-empty muted">这次没有可点的来源卡片。</p>
+          <div className="ask-pick-bar" role="group" aria-label="选择笔记">
+            <p className="ask-pick-hint muted">没有可纳入的笔记，可取消后换个问法</p>
+            <div className="ask-pick-actions">
+              <button
+                type="button"
+                className="ask-pick-btn secondary"
+                disabled={pickLocked}
+                onClick={onCancelPick}
+              >
+                取消
+              </button>
+              <SignatureButton type="button" disabled>
+                用所选笔记生成
+              </SignatureButton>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return <p className="hub-inline-empty muted">这次没有可点的来源卡片。</p>;
   }
 
@@ -364,7 +422,7 @@ function CitationsBlock({
           className="ask-cites-toggle"
           aria-expanded={open}
           aria-controls={panelId}
-          disabled={Boolean(forceOpen || scanning)}
+          disabled={Boolean(forceOpen || scanning || picking)}
           onClick={() => setPrefOpen(!prefOpen)}
         >
           <span className="ask-cites-chevron" aria-hidden="true" data-open={open ? "1" : "0"} />
@@ -373,6 +431,10 @@ function CitationsBlock({
           {scanning ? (
             <span className="ask-retrieve-live muted" aria-live="polite">
               找到 {(activeIndex ?? 0) + 1} / {citations.length} · 正在往下搜寻…
+            </span>
+          ) : picking ? (
+            <span className="ask-retrieve-live muted" aria-live="polite">
+              勾选要纳入的笔记，排除无关后再生成
             </span>
           ) : (
             <span className="ask-cites-hint muted">{open ? "收起" : "展开"}</span>
@@ -398,7 +460,9 @@ function CitationsBlock({
                   const shelf = shelfHref(c);
                   const active =
                     (scanning && i === activeIndex) ||
-                    (!scanning && activeN === c.n);
+                    (!scanning && !picking && activeN === c.n);
+                  const checked = Boolean(selectedNoteIds?.[c.note_id] ?? true);
+                  const muted = Boolean(picking && !checked);
                   return (
                     <motion.article
                       key={`card-${c.n}-${c.note_id}-${c.source_block_id || c.block_id}`}
@@ -407,7 +471,7 @@ function CitationsBlock({
                         if (node) cardRefs.current.set(c.n, node);
                         else cardRefs.current.delete(c.n);
                       }}
-                      className={`cite-card${active ? " cite-card-active" : ""}`}
+                      className={`cite-card${active ? " cite-card-active" : ""}${muted ? " cite-card-excluded" : ""}`}
                       initial={
                         scanning && !reduced
                           ? { opacity: 0, y: 22, scale: 0.9 }
@@ -415,16 +479,35 @@ function CitationsBlock({
                             ? false
                             : { opacity: 0, y: 8 }
                       }
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      animate={{ opacity: muted ? 0.55 : 1, y: 0, scale: 1 }}
                       exit={reduced ? undefined : { opacity: 0, y: -4, scale: 0.98 }}
                       transition={
                         scanning
                           ? springPop
                           : { duration: reduced ? 0 : 0.38, ease: easeOutExpo }
                       }
-                      whileHover={reduced || scanning ? undefined : { y: -1 }}
+                      whileHover={reduced || scanning || picking ? undefined : { y: -1 }}
                     >
-                      <Link href={citeHref(c)} className="cite-card-main">
+                      {picking ? (
+                        <label className="cite-card-check">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={pickLocked}
+                            aria-label={`纳入「${decodeSegment(c.title) || "未命名"}」`}
+                            onChange={() => onToggleNote?.(c.note_id)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </label>
+                      ) : null}
+                      <Link
+                        href={citeHref(c)}
+                        className="cite-card-main"
+                        onClick={(e) => {
+                          if (picking) e.preventDefault();
+                        }}
+                        tabIndex={picking ? -1 : undefined}
+                      >
                         <div className="cite-card-head">
                           <span className="cite-chip-n" aria-hidden="true">
                             {c.n}
@@ -434,7 +517,7 @@ function CitationsBlock({
                         {c.path ? <PathCrumbs path={c.path} title={c.title} /> : null}
                         {c.quote ? <blockquote className="ask-quote">{c.quote}</blockquote> : null}
                       </Link>
-                      {shelf ? (
+                      {shelf && !picking ? (
                         <div className="cite-card-foot">
                           <Link href={shelf} className="hit-shelf">
                             在书架中打开
@@ -449,6 +532,52 @@ function CitationsBlock({
           </motion.div>
         ) : null}
       </AnimatePresence>
+
+      {picking ? (
+        <div className="ask-pick-bar" role="group" aria-label="选择笔记">
+          <p className="ask-pick-hint muted">勾选要纳入的笔记，排除无关后再生成</p>
+          <div className="ask-pick-actions">
+            <button
+              type="button"
+              className="ask-pick-btn secondary"
+              disabled={pickLocked}
+              onClick={onSelectAll}
+            >
+              全选
+            </button>
+            <button
+              type="button"
+              className="ask-pick-btn secondary"
+              disabled={pickLocked}
+              onClick={onSelectNone}
+            >
+              全不选
+            </button>
+            <span className="ask-pick-count muted">
+              已选{" "}
+              {new Set(
+                citations.filter((c) => selectedNoteIds?.[c.note_id] !== false).map((c) => c.note_id),
+              ).size}{" "}
+              / {new Set(citations.map((c) => c.note_id)).size}
+            </span>
+            <button
+              type="button"
+              className="ask-pick-btn secondary"
+              disabled={pickLocked}
+              onClick={onCancelPick}
+            >
+              取消
+            </button>
+            <SignatureButton
+              type="button"
+              disabled={Boolean(generateDisabled || pickLocked)}
+              onClick={onConfirmGenerate}
+            >
+              {pickLocked ? "生成中…" : "用所选笔记生成"}
+            </SignatureButton>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -464,6 +593,15 @@ function AssistantBody({
   scanning,
   activeIndex,
   query,
+  picking,
+  selectedNoteIds,
+  onToggleNote,
+  onSelectAll,
+  onSelectNone,
+  onConfirmGenerate,
+  onCancelPick,
+  generateDisabled,
+  pickLocked,
 }: {
   content: string | null;
   citations: Citation[];
@@ -477,6 +615,15 @@ function AssistantBody({
   activeIndex?: number;
   /** Paired user question for weak-evidence hint */
   query?: string | null;
+  picking?: boolean;
+  selectedNoteIds?: Record<string, boolean>;
+  onToggleNote?: (noteId: string) => void;
+  onSelectAll?: () => void;
+  onSelectNone?: () => void;
+  onConfirmGenerate?: () => void;
+  onCancelPick?: () => void;
+  generateDisabled?: boolean;
+  pickLocked?: boolean;
 }) {
   const displayCites =
     displayCitations ?? selectDisplayCitations(citations, content);
@@ -488,9 +635,13 @@ function AssistantBody({
           <p className="ask-mode-pill muted" aria-live="polite">
             正在搜寻相关笔记…
           </p>
+        ) : picking ? (
+          <p className="ask-mode-pill muted" aria-live="polite">
+            请勾选要纳入回答的笔记
+          </p>
         ) : null}
 
-        {displayCites.length ? (
+        {displayCites.length || picking ? (
           <section className="ask-section ask-section-cites" aria-label="检索来源">
             <p className="ask-section-label">检索</p>
             <CitationsBlock
@@ -498,15 +649,24 @@ function AssistantBody({
               reduced={reduced}
               scanning={scanning}
               activeIndex={activeIndex}
-              forceOpen={scanning}
+              forceOpen={Boolean(scanning || picking)}
               query={query}
+              picking={picking}
+              selectedNoteIds={selectedNoteIds}
+              onToggleNote={onToggleNote}
+              onSelectAll={onSelectAll}
+              onSelectNone={onSelectNone}
+              onConfirmGenerate={onConfirmGenerate}
+              onCancelPick={onCancelPick}
+              generateDisabled={generateDisabled}
+              pickLocked={pickLocked}
             />
           </section>
         ) : !scanning && content != null ? (
           <p className="hub-inline-empty muted ask-section-cites">笔记里没有直接依据可点的来源。</p>
         ) : null}
 
-        {content != null && !scanning ? (
+        {content != null && !scanning && !picking ? (
           <section className="ask-section ask-section-answer" aria-label="回答">
             <p className="ask-section-label">回答</p>
             {aiFailed ? (
@@ -688,20 +848,39 @@ export default function AskPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [deleteTarget, deleting]);
 
-  function runRetrieveThenAnswer(
-    payload: Omit<RevealState, "phase" | "activeIndex" | "displayCitations">,
-    after: () => Promise<void>,
+  function selectedIdsFromRecord(sel: Record<string, boolean>, cites: DisplayCitation[]): string[] {
+    const ids = new Set<string>();
+    for (const c of cites) {
+      if (sel[c.note_id] !== false) ids.add(c.note_id);
+    }
+    return [...ids];
+  }
+
+  function defaultSelected(cites: DisplayCitation[]): Record<string, boolean> {
+    const sel: Record<string, boolean> = {};
+    for (const c of cites) sel[c.note_id] = true;
+    return sel;
+  }
+
+  /** After retrieve-only: scan sources, then enter pick (do not generate yet). */
+  function runRetrieveThenPick(
+    payload: Omit<RevealState, "phase" | "activeIndex" | "displayCitations" | "selectedNoteIds" | "answer"> & {
+      answer?: string;
+      selectedNoteIds?: Record<string, boolean>;
+    },
   ) {
     clearRevealTimers();
-    const display = selectDisplayCitations(payload.citations, payload.answer);
+    const display = selectDisplayCitations(payload.citations, null);
+    const selectedNoteIds = payload.selectedNoteIds ?? defaultSelected(display);
     const revealPayload: Omit<RevealState, "phase" | "activeIndex"> = {
       ...payload,
+      answer: "",
       displayCitations: display,
+      selectedNoteIds,
     };
     if (!display.length || reduced) {
-      setReveal({ ...revealPayload, phase: "answer", activeIndex: -1 });
+      setReveal({ ...revealPayload, phase: "pick", activeIndex: -1 });
       setBusy(false);
-      void after().finally(() => setReveal(null));
       return;
     }
 
@@ -712,35 +891,148 @@ export default function AskPage() {
     for (let i = 1; i < display.length; i++) {
       const t = setTimeout(() => {
         setReveal((prev) =>
-          prev && prev.id === payload.id ? { ...prev, activeIndex: i } : prev,
+          prev && prev.id === payload.id && prev.phase === "retrieve"
+            ? { ...prev, activeIndex: i }
+            : prev,
         );
       }, step * i);
       revealTimers.current.push(t);
     }
-    // Hold on last hit, then fold sources and reveal answer underneath.
     const done = setTimeout(() => {
       setReveal((prev) =>
         prev && prev.id === payload.id
-          ? { ...prev, phase: "answer", activeIndex: display.length - 1 }
+          ? { ...prev, phase: "pick", activeIndex: display.length - 1 }
           : prev,
       );
-      try {
-        localStorage.setItem(SOURCES_OPEN_KEY, "0");
-      } catch {
-        /* ignore */
-      }
-      void after().finally(() => {
-        setTimeout(() => {
-          setReveal((prev) => (prev && prev.id === payload.id ? null : prev));
-        }, 160);
-      });
     }, step * display.length + FOLD_HOLD_MS);
     revealTimers.current.push(done);
   }
 
+  /** After generate: brief transition to answer (skip re-scan). */
+  function runShowAnswer(
+    payload: Omit<RevealState, "phase" | "activeIndex" | "displayCitations" | "selectedNoteIds"> & {
+      selectedNoteIds?: Record<string, boolean>;
+    },
+    after: () => Promise<void>,
+  ) {
+    clearRevealTimers();
+    const display = selectDisplayCitations(payload.citations, payload.answer);
+    const selectedNoteIds = payload.selectedNoteIds ?? defaultSelected(display);
+    setReveal({
+      ...payload,
+      displayCitations: display,
+      selectedNoteIds,
+      phase: "answer",
+      activeIndex: display.length ? display.length - 1 : -1,
+    });
+    setBusy(false);
+    try {
+      localStorage.setItem(SOURCES_OPEN_KEY, "0");
+    } catch {
+      /* ignore */
+    }
+    void after().finally(() => {
+      setTimeout(() => {
+        setReveal((prev) => (prev && prev.id === payload.id ? null : prev));
+      }, 160);
+    });
+  }
+
+  function cancelPick() {
+    const optId = reveal?.optimisticUserId;
+    clearRevealTimers();
+    setReveal(null);
+    setBusy(false);
+    if (optId) {
+      setMessages((prev) => prev.filter((m) => m.id !== optId));
+    }
+  }
+
+  function toggleNote(noteId: string) {
+    setReveal((prev) => {
+      if (!prev || prev.phase !== "pick") return prev;
+      const cur = prev.selectedNoteIds[noteId] !== false;
+      return {
+        ...prev,
+        selectedNoteIds: { ...prev.selectedNoteIds, [noteId]: !cur },
+      };
+    });
+  }
+
+  function selectAllNotes() {
+    setReveal((prev) => {
+      if (!prev || prev.phase !== "pick") return prev;
+      return { ...prev, selectedNoteIds: defaultSelected(prev.displayCitations) };
+    });
+  }
+
+  function selectNoneNotes() {
+    setReveal((prev) => {
+      if (!prev || prev.phase !== "pick") return prev;
+      const sel: Record<string, boolean> = {};
+      for (const c of prev.displayCitations) sel[c.note_id] = false;
+      return { ...prev, selectedNoteIds: sel };
+    });
+  }
+
+  async function onGenerate() {
+    if (!space || !reveal || reveal.phase !== "pick" || busy) return;
+    const query = reveal.pendingQuery || reveal.query || "";
+    if (!query.trim()) return;
+    const noteIds = selectedIdsFromRecord(reveal.selectedNoteIds, reveal.displayCitations);
+    if (!noteIds.length) return;
+
+    setErr("");
+    setBusy(true);
+    const revealId = reveal.id;
+    const optimisticId = reveal.optimisticUserId;
+
+    try {
+      const res = await api<AskOut>(`/v1/spaces/${space.id}/ask`, {
+        method: "POST",
+        body: JSON.stringify({
+          q: query,
+          query,
+          note_ids: noteIds,
+          thread_id: threadId || undefined,
+          generate: true,
+        }),
+        timeoutMs: ASK_TIMEOUT_MS,
+      });
+      const tid = res.thread_id ?? threadId;
+      if (tid) setThreadId(tid);
+      const cites = res.citations ?? [];
+      runShowAnswer(
+        {
+          id: revealId,
+          citations: cites,
+          answer: res.answer_markdown,
+          query,
+          mode: res.mode ?? null,
+          ai_failed: Boolean(res.ai_failed),
+          ai_error: res.ai_error ?? null,
+          pendingQuery: query,
+          optimisticUserId: optimisticId,
+          selectedNoteIds: Object.fromEntries(noteIds.map((id) => [id, true])),
+        },
+        async () => {
+          if (space) await refreshThreads(space.id);
+          if (tid && space) await loadMessages(space.id, tid, { silent: true });
+        },
+      );
+    } catch (er) {
+      setErr(er instanceof Error ? er.message : "生成失败");
+      setBusy(false);
+      // Stay in pick if possible
+      setReveal((prev) =>
+        prev && prev.id === revealId ? { ...prev, phase: "pick" } : prev,
+      );
+    }
+  }
+
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!space || busy || reveal?.phase === "retrieve") return;
+    if (!space || busy || reveal?.phase === "retrieve" || reveal?.phase === "pick") return;
     const form = e.currentTarget;
     const query = String(new FormData(form).get("query") ?? "").trim();
     if (!query) return;
@@ -762,85 +1054,29 @@ export default function AskPage() {
     form.reset();
 
     const revealId = `reveal-${Date.now()}`;
-    let earlyScanStarted = false;
-
-    // Kick search in parallel so source cards can appear during the wait,
-    // instead of only after the fake pipeline + ask both finish.
-    const searchP = api<{
-      results?: Array<{
-        note_id?: string;
-        title?: string;
-        snippet?: string | null;
-        path?: string;
-        connection_id?: string;
-        source_block_id?: string | null;
-        preview_url?: string;
-      }>;
-    }>(`/v1/spaces/${space.id}/search?q=${encodeURIComponent(query)}`)
-      .then((out) => {
-        const early = searchHitsToCitations(out.results ?? []);
-        if (!early.length || earlyScanStarted) return;
-        earlyScanStarted = true;
-        const display = selectDisplayCitations(early, null);
-        setBusy(false);
-        setReveal({
-          id: revealId,
-          citations: early,
-          displayCitations: display,
-          answer: "",
-          query,
-          mode: null,
-          ai_failed: false,
-          ai_error: null,
-          phase: "retrieve",
-          activeIndex: 0,
-        });
-        const step = RETRIEVE_STEP_MS;
-        for (let i = 1; i < display.length; i++) {
-          const t = setTimeout(() => {
-            setReveal((prev) =>
-              prev && prev.id === revealId && prev.phase === "retrieve" && !prev.answer
-                ? { ...prev, activeIndex: i }
-                : prev,
-            );
-          }, step * i);
-          revealTimers.current.push(t);
-        }
-      })
-      .catch(() => {
-        /* search is best-effort for early scan */
-      });
 
     try {
+      // Retrieve-only — no thread_id (avoid empty threads); user picks notes next.
       const res = await api<AskOut>(`/v1/spaces/${space.id}/ask`, {
         method: "POST",
         body: JSON.stringify({
           q: query,
           query,
-          thread_id: threadId || undefined,
+          generate: false,
         }),
         timeoutMs: ASK_TIMEOUT_MS,
       });
-      await Promise.race([searchP, new Promise((r) => setTimeout(r, 0))]);
-      const tid = res.thread_id ?? threadId;
-      if (tid) setThreadId(tid);
       const cites = res.citations ?? [];
-
-      runRetrieveThenAnswer(
-        {
-          id: revealId,
-          citations: cites,
-          answer: res.answer_markdown,
-          query,
-          mode: res.mode ?? null,
-          ai_failed: Boolean(res.ai_failed),
-          ai_error: res.ai_error ?? null,
-        },
-        async () => {
-          if (space) await refreshThreads(space.id);
-          if (tid && space) await loadMessages(space.id, tid, { silent: true });
-        },
-      );
+      runRetrieveThenPick({
+        id: revealId,
+        citations: cites,
+        query,
+        mode: res.mode ?? null,
+        ai_failed: false,
+        ai_error: null,
+        pendingQuery: query,
+        optimisticUserId: optimisticId,
+      });
     } catch (er) {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
       setErr(er instanceof Error ? er.message : "提问失败");
@@ -1015,11 +1251,28 @@ export default function AskPage() {
                   scanning={reveal.phase === "retrieve"}
                   activeIndex={reveal.activeIndex}
                   query={reveal.query}
+                  picking={reveal.phase === "pick"}
+                  selectedNoteIds={reveal.selectedNoteIds}
+                  onToggleNote={toggleNote}
+                  onSelectAll={selectAllNotes}
+                  onSelectNone={selectNoneNotes}
+                  onConfirmGenerate={() => void onGenerate()}
+                  onCancelPick={cancelPick}
+                  generateDisabled={
+                    selectedIdsFromRecord(reveal.selectedNoteIds, reveal.displayCitations)
+                      .length === 0
+                  }
+                  pickLocked={busy && reveal.phase === "pick"}
                 />
               </motion.div>
             ) : null}
 
-            {busy ? <AskRetrievePipeline reduced={reduced} /> : null}
+            {busy ? (
+              <AskRetrievePipeline
+                reduced={reduced}
+                mode={reveal?.phase === "pick" || reveal?.phase === "answer" ? "generate" : "retrieve"}
+              />
+            ) : null}
 
             {err ? (
               <div className="hub-state hub-state-error" role="alert">
@@ -1044,12 +1297,33 @@ export default function AskPage() {
               type="text"
               placeholder="问当前空间的笔记…"
               required
-              disabled={busy || !space || reveal?.phase === "retrieve"}
+              disabled={
+                busy ||
+                !space ||
+                reveal?.phase === "retrieve" ||
+                reveal?.phase === "pick"
+              }
               autoComplete="off"
               enterKeyHint="send"
             />
-            <SignatureButton type="submit" disabled={busy || !space || reveal?.phase === "retrieve"}>
-              {busy ? "检索中…" : reveal?.phase === "retrieve" ? "对照中…" : "提问"}
+            <SignatureButton
+              type="submit"
+              disabled={
+                busy ||
+                !space ||
+                reveal?.phase === "retrieve" ||
+                reveal?.phase === "pick"
+              }
+            >
+              {busy
+                ? reveal?.phase === "pick"
+                  ? "生成中…"
+                  : "检索中…"
+                : reveal?.phase === "retrieve"
+                  ? "对照中…"
+                  : reveal?.phase === "pick"
+                    ? "选择笔记中…"
+                    : "提问"}
             </SignatureButton>
           </form>
         </section>
