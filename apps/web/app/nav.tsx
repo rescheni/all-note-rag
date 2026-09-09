@@ -8,7 +8,6 @@ import {
   IconAsk,
   IconClose,
   IconConnect,
-  IconGrowth,
   IconLogin,
   IconLogout,
   IconMenu,
@@ -187,10 +186,6 @@ export function Nav() {
               </NavLink>
               <NavLink href="/ask" icon={<IconAsk />} onNavigate={closeMenu}>
                 问答
-              </NavLink>
-              <div className="nav-gap" />
-              <NavLink href="/growth" icon={<IconGrowth />} onNavigate={closeMenu}>
-                成长
               </NavLink>
               <div className="nav-gap" />
               <NavLink href="/connections" icon={<IconConnect />} onNavigate={closeMenu}>
