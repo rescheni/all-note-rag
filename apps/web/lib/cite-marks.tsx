@@ -141,7 +141,7 @@ function CitationMark({ n, citation }: { n: number; citation: CiteRef }) {
 
   const scheduleClose = () => {
     clearClose();
-    closeTimer.current = setTimeout(() => setOpen(false), 140);
+    closeTimer.current = setTimeout(() => setOpen(false), 320);
   };
 
   const place = useCallback(() => {
@@ -167,7 +167,12 @@ function CitationMark({ n, citation }: { n: number; citation: CiteRef }) {
   useEffect(() => {
     if (open) {
       setActiveN(n);
-      return () => setActiveN(null);
+      const wrap = btnRef.current?.closest("p, li, h1, h2, h3, blockquote, td");
+      wrap?.classList.add("cite-context-hl");
+      return () => {
+        setActiveN(null);
+        wrap?.classList.remove("cite-context-hl");
+      };
     }
     return undefined;
   }, [open, n, setActiveN]);

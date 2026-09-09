@@ -19,6 +19,8 @@ import {
 
 export const springSoft = { type: "spring" as const, stiffness: 420, damping: 32, mass: 0.55 };
 export const springSnap = { type: "spring" as const, stiffness: 520, damping: 36, mass: 0.42 };
+/** Big retrieve pop — slower, more bounce, unmistakable one-by-one find. */
+export const springPop = { type: "spring" as const, stiffness: 300, damping: 22, mass: 0.78 };
 export const easeOutExpo = [0.16, 1, 0.3, 1] as const;
 
 export { AnimatePresence, LayoutGroup, motion, useReducedMotion };

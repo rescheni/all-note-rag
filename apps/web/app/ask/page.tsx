@@ -14,6 +14,7 @@ import {
   motion,
   springSoft,
   springSnap,
+  springPop,
   useReducedMotion,
 } from "../ui-motion";
 
@@ -74,7 +75,7 @@ type RevealState = {
 
 const ASK_TIMEOUT_MS = 180_000;
 const SOURCES_OPEN_KEY = "note-hub:ask-sources-open";
-const RETRIEVE_STEP_MS = 580;
+const RETRIEVE_STEP_MS = 620;
 
 function shelfHref(c: Citation): string | null {
   if (!c.connection_id || !c.path) return null;
@@ -135,13 +136,11 @@ function selectDisplayCitations(
 }
 
 function useSourcesOpenPref(): [boolean, (v: boolean) => void] {
+  // Always start collapsed (history + post-scan). Ignore stale localStorage open=1.
   const [open, setOpen] = useState(false);
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(SOURCES_OPEN_KEY);
-      // Default hidden; only expand if user previously chose open.
-      if (raw === "1") setOpen(true);
-      else setOpen(false);
+      localStorage.setItem(SOURCES_OPEN_KEY, "0");
     } catch {
       /* ignore */
     }
@@ -227,10 +226,10 @@ function CitationsBlock({
               <motion.div
                 key={`chip-${c.n}-${c.note_id}-${c.source_block_id || c.block_id}`}
                 layout
-                initial={scanning && !reduced ? { opacity: 0, y: 6, scale: 0.9 } : false}
+                initial={scanning && !reduced ? { opacity: 0, y: 18, scale: 0.82 } : false}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={reduced ? undefined : { opacity: 0, scale: 0.94 }}
-                transition={springSnap}
+                transition={scanning ? springPop : springSnap}
                 whileHover={reduced ? undefined : { y: -1, scale: 1.02 }}
                 whileTap={reduced ? undefined : { scale: 0.97 }}
               >
@@ -249,21 +248,34 @@ function CitationsBlock({
         </AnimatePresence>
       </div>
 
-      {hoverCite ? (
-        <div className="cite-chip-quote" role="status">
-          <div className="cite-chip-quote-head">
-            <span className="cite-chip-n" aria-hidden="true">
-              {hoverCite.n}
-            </span>
-            <strong>{decodeSegment(hoverCite.title) || "未命名"}</strong>
-          </div>
-          {hoverCite.quote ? (
-            <p className="cite-chip-quote-body">{hoverCite.quote}</p>
-          ) : (
-            <p className="cite-chip-quote-body muted">暂无摘录</p>
-          )}
-        </div>
-      ) : null}
+      <AnimatePresence initial={false}>
+        {hoverCite ? (
+          <motion.div
+            key={`hq-${hoverCite.n}`}
+            className="cite-chip-quote"
+            role="status"
+            initial={reduced ? false : { opacity: 0, y: -4, height: 0 }}
+            animate={{ opacity: 1, y: 0, height: "auto" }}
+            exit={reduced ? undefined : { opacity: 0, y: -2, height: 0 }}
+            transition={{ duration: reduced ? 0 : 0.22, ease: easeOutExpo }}
+            style={{ overflow: "hidden" }}
+          >
+            <div className="cite-chip-quote-head">
+              <span className="cite-chip-n" aria-hidden="true">
+                {hoverCite.n}
+              </span>
+              <strong>{decodeSegment(hoverCite.title) || "未命名"}</strong>
+            </div>
+            {hoverCite.quote ? (
+              <p className="cite-chip-quote-body">
+                <mark className="cite-hl">{hoverCite.quote}</mark>
+              </p>
+            ) : (
+              <p className="cite-chip-quote-body muted">暂无摘录</p>
+            )}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
       <div className="ask-cites-toggle-row">
         <button
@@ -296,7 +308,7 @@ function CitationsBlock({
             initial={reduced ? false : { height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={reduced ? undefined : { height: 0, opacity: 0 }}
-            transition={{ duration: 0.28, ease: easeOutExpo }}
+            transition={{ duration: reduced ? 0 : 0.42, ease: easeOutExpo }}
             style={{ overflow: "hidden" }}
           >
             <div className="cite-stack">
@@ -317,14 +329,14 @@ function CitationsBlock({
                       className={`cite-card${active ? " cite-card-active" : ""}`}
                       initial={
                         scanning && !reduced
-                          ? { opacity: 0, y: 16, scale: 0.96 }
+                          ? { opacity: 0, y: 32, scale: 0.84 }
                           : reduced
                             ? false
                             : { opacity: 0, y: 8 }
                       }
                       animate={{ opacity: 1, y: 0, scale: 1 }}
                       exit={reduced ? undefined : { opacity: 0, y: -6, scale: 0.98 }}
-                      transition={scanning ? springSnap : springSoft}
+                      transition={scanning ? springPop : springSoft}
                       whileHover={reduced || scanning ? undefined : { y: -2 }}
                     >
                       <Link href={citeHref(c)} className="cite-card-main">
@@ -382,43 +394,51 @@ function AssistantBody({
     displayCitations ?? selectDisplayCitations(citations, content);
   return (
     <CiteActiveProvider>
-      {aiFailed && !scanning ? (
-        <p className="ask-ai-failed" role="status">
-          {`AI 未能生成（${aiError || "未知原因"}）. 以下为检索摘录。`}
-        </p>
-      ) : mode && !scanning ? (
-        <p className="ask-mode-pill muted">
-          {mode === "ai" ? "回答来自大模型（附引用）" : "回答为本地抽取（未走大模型）"}
-        </p>
-      ) : scanning ? (
-        <p className="ask-mode-pill muted" aria-live="polite">
-          正在搜寻相关笔记…
-        </p>
-      ) : null}
+      <div className="ask-assistant-stack">
+        {aiFailed && !scanning ? (
+          <p className="ask-ai-failed" role="status">
+            {`AI 未能生成（${aiError || "未知原因"}）. 以下为检索摘录。`}
+          </p>
+        ) : mode && !scanning ? (
+          <p className="ask-mode-pill muted">
+            {mode === "ai" ? "回答来自大模型（附引用）" : "回答为本地抽取（未走大模型）"}
+          </p>
+        ) : scanning ? (
+          <p className="ask-mode-pill muted" aria-live="polite">
+            正在搜寻相关笔记…
+          </p>
+        ) : null}
 
-      {displayCites.length ? (
-        <CitationsBlock
-          citations={displayCites}
-          allCitations={citations}
-          reduced={reduced}
-          scanning={scanning}
-          activeIndex={activeIndex}
-          forceOpen={scanning}
-        />
-      ) : !scanning && content != null ? (
-        <p className="hub-inline-empty muted">笔记里没有直接依据可点的来源。</p>
-      ) : null}
+        {displayCites.length ? (
+          <section className="ask-section ask-section-cites" aria-label="检索来源">
+            <p className="ask-section-label">检索</p>
+            <CitationsBlock
+              citations={displayCites}
+              allCitations={citations}
+              reduced={reduced}
+              scanning={scanning}
+              activeIndex={activeIndex}
+              forceOpen={scanning}
+            />
+          </section>
+        ) : !scanning && content != null ? (
+          <p className="hub-inline-empty muted">笔记里没有直接依据可点的来源。</p>
+        ) : null}
 
-      {content != null && !scanning ? (
-        <motion.article
-          className="ask-answer-paper"
-          initial={reduced ? false : { opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.32, ease: easeOutExpo }}
-        >
-          <SafeMarkdown source={content} citations={citations} />
-        </motion.article>
-      ) : null}
+        {content != null && !scanning ? (
+          <section className="ask-section ask-section-answer" aria-label="回答">
+            <p className="ask-section-label">回答</p>
+            <motion.article
+              className="ask-answer-paper"
+              initial={reduced ? false : { opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: reduced ? 0 : 0.45, ease: easeOutExpo, delay: reduced ? 0 : 0.06 }}
+            >
+              <SafeMarkdown source={content} citations={citations} />
+            </motion.article>
+          </section>
+        ) : null}
+      </div>
     </CiteActiveProvider>
   );
 }
@@ -624,7 +644,7 @@ export default function AskPage() {
           setReveal((prev) => (prev && prev.id === payload.id ? null : prev));
         }, 160);
       });
-    }, step * display.length + 520);
+    }, step * display.length + 640);
     revealTimers.current.push(done);
   }
 
