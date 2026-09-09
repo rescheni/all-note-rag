@@ -67,3 +67,12 @@ export {
   type SearchCorpusChunk,
   type SearchSourcesOpts,
 } from "./search.ts";
+
+export {
+  composeGrowthAiReport,
+  clipNoteExcerpt,
+  growthAiFailure,
+  type GrowthAiNote,
+  type GrowthAiReportResult,
+} from "./growth-report.ts";
+

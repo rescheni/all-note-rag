@@ -1,15 +1,26 @@
 import { Hono } from "hono";
 import {
+  ChatUpstreamError,
+  composeGrowthAiReport,
+  growthAiFailure,
+  shortAiError,
+  type GrowthAiNote,
+} from "@note-hub/retrieve";
+import { loadAiSettings } from "@note-hub/core";
+import {
   GROWTH_KINDS,
   createPgHostApi,
   ensureSkillOnSpace,
+  filterExcludedGrowth,
   growthAccessError,
   lastSevenDayRange,
+  noteMatchesExclude,
   parseStringList,
   runOfficialHook,
   type GrowthKind,
 } from "@note-hub/skills-runtime";
 import { query } from "../db.ts";
+import { env } from "../env.ts";
 import { errors, jsonError } from "../errors.ts";
 import { loadMembership, requireRole, requireUser, type AuthUser } from "../auth.ts";
 
@@ -21,6 +32,8 @@ type PersonalOwner =
   | { ok: false; error: "not_found" | "forbidden" }
   | { ok: false; error: "growth"; growthErr: NonNullable<ReturnType<typeof growthAccessError>> }
   | { ok: true; space: { kind: string; owner_user_id: string }; mem: NonNullable<Awaited<ReturnType<typeof loadMembership>>> };
+
+type IncludedNote = { id: string; title: string; path: string };
 
 async function loadPersonalOwner(userId: string, spaceId: string): Promise<PersonalOwner> {
   const gate = await requireRole(userId, spaceId, "viewer");
@@ -56,6 +69,22 @@ function reportParams(c: { req: { query: (k: string) => string | undefined } }, 
   return { from, to, exclude_ids, exclude_paths };
 }
 
+function asIncludedNotes(raw: unknown): IncludedNote[] {
+  if (!Array.isArray(raw)) return [];
+  const out: IncludedNote[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    if (typeof row.id !== "string" || !row.id) continue;
+    out.push({
+      id: row.id,
+      title: typeof row.title === "string" ? row.title : row.id,
+      path: typeof row.path === "string" ? row.path : "",
+    });
+  }
+  return out;
+}
+
 async function runGrowthReport(
   userId: string,
   spaceId: string,
@@ -80,6 +109,10 @@ async function runGrowthReport(
      FROM growth_reports WHERE space_id = $1 ORDER BY created_at DESC LIMIT 1`,
     [spaceId],
   );
+  let included_notes = asIncludedNotes(result.extra?.included_notes);
+  if (!included_notes.length) {
+    included_notes = await loadIncludedNotes(userId, spaceId, params);
+  }
   return {
     from: params.from,
     to: params.to,
@@ -87,7 +120,48 @@ async function runGrowthReport(
     exclude_paths: params.exclude_paths,
     markdown: result.markdown ?? latest.rows[0]?.markdown ?? "",
     report: latest.rows[0] ?? null,
+    included_notes,
+    mode: "template" as const,
   };
+}
+
+async function loadIncludedNotes(
+  userId: string,
+  spaceId: string,
+  params: { from: string; to: string; exclude_ids: string[]; exclude_paths: string[] },
+): Promise<IncludedNote[]> {
+  const host = createPgHostApi({ query, spaceId, userId });
+  const events = await host.queryGrowth({ from: params.from, to: params.to });
+  const ids = [...new Set(events.map((e) => e.note_id).filter((id): id is string => Boolean(id)))];
+  const notes = ids.length ? await host.queryNotes({ ids }) : [];
+  const filtered = filterExcludedGrowth(events, notes, params.exclude_ids, params.exclude_paths);
+  return filtered.notes.map((n) => ({ id: n.id, title: n.title, path: n.path }));
+}
+
+async function loadNotesForAi(
+  userId: string,
+  spaceId: string,
+  params: { from: string; to: string; exclude_ids: string[]; exclude_paths: string[] },
+  noteIds: string[] | undefined,
+): Promise<GrowthAiNote[]> {
+  const host = createPgHostApi({ query, spaceId, userId });
+  const idSet = new Set(params.exclude_ids);
+  if (noteIds?.length) {
+    const notes = await host.queryNotes({ ids: noteIds });
+    return notes
+      .filter((n) => !noteMatchesExclude(n, n.id, idSet, params.exclude_paths))
+      .map((n) => ({ id: n.id, title: n.title, path: n.path, markdown: n.markdown }));
+  }
+  const events = await host.queryGrowth({ from: params.from, to: params.to });
+  const ids = [...new Set(events.map((e) => e.note_id).filter((id): id is string => Boolean(id)))];
+  const notes = ids.length ? await host.queryNotes({ ids }) : [];
+  const filtered = filterExcludedGrowth(events, notes, params.exclude_ids, params.exclude_paths);
+  return filtered.notes.map((n) => ({
+    id: n.id,
+    title: n.title,
+    path: n.path,
+    markdown: n.markdown,
+  }));
 }
 
 growthRoutes.get("/spaces/:id/growth/report", async (c) => {
@@ -115,8 +189,130 @@ growthRoutes.post("/spaces/:id/growth/report", async (c) => {
   }
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const params = reportParams(c, body);
-  const out = await runGrowthReport(user.id, spaceId, params);
-  return c.json(out);
+  const wantAi = body.ai === true || body.ai === "true" || body.mode === "ai";
+
+  if (!wantAi) {
+    const out = await runGrowthReport(user.id, spaceId, params);
+    return c.json(out);
+  }
+
+  // AI path — soft-fail to draft; never 500 on upstream chat errors.
+  let draftMarkdown =
+    typeof body.draft_markdown === "string"
+      ? body.draft_markdown
+      : typeof body.draftMarkdown === "string"
+        ? body.draftMarkdown
+        : "";
+  let included_notes: IncludedNote[] = [];
+  if (!draftMarkdown.trim()) {
+    const draft = await runGrowthReport(user.id, spaceId, params);
+    draftMarkdown = draft.markdown;
+    included_notes = draft.included_notes;
+  } else {
+    included_notes = await loadIncludedNotes(user.id, spaceId, params);
+  }
+
+  const noteIdsRaw = body.note_ids ?? body.noteIds;
+  const note_ids = Array.isArray(noteIdsRaw)
+    ? noteIdsRaw.filter((id): id is string => typeof id === "string" && Boolean(id))
+    : undefined;
+
+  const ai = await loadAiSettings(query, env.hubSecret);
+  const chat = ai.configured
+    ? { baseUrl: ai.base_url, apiKey: ai.api_key, model: ai.chat_model }
+    : undefined;
+
+  if (!chat) {
+    return c.json({
+      from: params.from,
+      to: params.to,
+      exclude_ids: params.exclude_ids,
+      exclude_paths: params.exclude_paths,
+      markdown: draftMarkdown,
+      draft_markdown: draftMarkdown,
+      included_notes,
+      mode: "ai",
+      ai_failed: true,
+      ai_error: "未配置 AI（请到设置填写 Base URL 与 API Key）",
+      ai_configured: false,
+    });
+  }
+
+  const notesForAi = await loadNotesForAi(user.id, spaceId, params, note_ids);
+  try {
+    const markdown = await composeGrowthAiReport(draftMarkdown, notesForAi, chat);
+    const host = createPgHostApi({ query, spaceId, userId: user.id });
+    await host.writeReport({
+      range_from: params.from,
+      range_to: params.to,
+      markdown,
+    });
+    const latest = await query(
+      `SELECT id, space_id, range_from, range_to, markdown, created_at
+       FROM growth_reports WHERE space_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [spaceId],
+    );
+    return c.json({
+      from: params.from,
+      to: params.to,
+      exclude_ids: params.exclude_ids,
+      exclude_paths: params.exclude_paths,
+      markdown,
+      draft_markdown: draftMarkdown,
+      included_notes,
+      note_ids: notesForAi.map((n) => n.id),
+      mode: "ai",
+      ai_configured: true,
+      report: latest.rows[0] ?? null,
+    });
+  } catch (e) {
+    if (e instanceof ChatUpstreamError) {
+      console.error(
+        JSON.stringify({
+          level: "error",
+          message: "growth ai report failed; returning draft",
+          code: e.code,
+          error: e.message,
+          status: e.status,
+        }),
+      );
+      const failed = growthAiFailure(draftMarkdown, e);
+      return c.json({
+        from: params.from,
+        to: params.to,
+        exclude_ids: params.exclude_ids,
+        exclude_paths: params.exclude_paths,
+        markdown: failed.markdown,
+        draft_markdown: draftMarkdown,
+        included_notes,
+        mode: "ai",
+        ai_failed: true,
+        ai_error: failed.ai_error ?? shortAiError(e),
+        ai_configured: true,
+      });
+    }
+    console.error(
+      JSON.stringify({
+        level: "error",
+        message: "growth ai report unexpected error; returning draft",
+        error: String(e),
+      }),
+    );
+    const failed = growthAiFailure(draftMarkdown, e);
+    return c.json({
+      from: params.from,
+      to: params.to,
+      exclude_ids: params.exclude_ids,
+      exclude_paths: params.exclude_paths,
+      markdown: failed.markdown,
+      draft_markdown: draftMarkdown,
+      included_notes,
+      mode: "ai",
+      ai_failed: true,
+      ai_error: failed.ai_error,
+      ai_configured: true,
+    });
+  }
 });
 
 growthRoutes.get("/spaces/:id/growth", async (c) => {

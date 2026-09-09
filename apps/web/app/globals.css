@@ -4869,6 +4869,42 @@ button.heat-cell:hover { box-shadow: none; }
   margin: 0 0 0.65rem;
 }
 
+.growth-ai-step {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+  background: color-mix(in srgb, var(--moss-wash) 28%, var(--paper));
+}
+.growth-ai-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.55rem;
+  margin: 0.35rem 0 0.55rem;
+}
+.growth-ai-include-list {
+  max-height: 14rem;
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+}
+.growth-report-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem 1rem;
+  margin-bottom: 0.15rem;
+}
+.growth-report-head h2 {
+  margin: 0;
+}
+.growth-report-tabs {
+  margin: 0;
+}
+.growth-report-view .report-md {
+  padding: 0.85rem 1rem;
+  border-radius: calc(var(--radius) + 2px);
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--paper) 94%, var(--moss-wash));
+}
+
 
 /* ---- settings model combo ---- */
 .model-toolbar {

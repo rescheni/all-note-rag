@@ -100,7 +100,12 @@ export const growthWeeklyHandler: SkillHandler = async (input) => {
         : undefined,
     });
     await host.writeReport({ range_from: from, range_to: to, markdown });
-    return { ok: true, markdown };
+    const included_notes = filtered.notes.map((n) => ({
+      id: n.id,
+      title: n.title,
+      path: n.path,
+    }));
+    return { ok: true, markdown, extra: { included_notes } };
   }
 
   if (hook === "on-ask") {
