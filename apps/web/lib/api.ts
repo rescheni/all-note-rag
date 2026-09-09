@@ -3,8 +3,28 @@ export function apiOrigin(): string {
   return process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3001";
 }
 
-/** Browser: same-origin (Next rewrite). Server: local API. */
-export const API = typeof window !== "undefined" ? "" : (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3001");
+/**
+ * Browser API base.
+ * - Localhost: call API :3001 directly (avoids Next rewrite proxy socket hang → HTML error page).
+ * - Production: same-origin so Cloudflare/tunnel rewrite still works.
+ * Override with NEXT_PUBLIC_BROWSER_API_URL when needed.
+ */
+export function browserApiBase(): string {
+  if (typeof window === "undefined") return "";
+  const override = (process.env.NEXT_PUBLIC_BROWSER_API_URL || "").replace(/\/$/, "");
+  if (override) return override;
+  const host = window.location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") {
+    return "http://127.0.0.1:3001";
+  }
+  return "";
+}
+
+/** Browser: prefer direct local API; else same-origin rewrite. Server: API URL. */
+export const API =
+  typeof window !== "undefined"
+    ? browserApiBase()
+    : process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:3001";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -17,7 +37,7 @@ export function setToken(token: string | null) {
   else localStorage.removeItem("hub_token");
 }
 
-const HTML_MSG = "服务返回了网页而不是 JSON 数据（可能是网关超时或上游异常）。请稍后重试；问答若已检索到笔记，服务端会改为返回摘录而不是错误页。";
+const HTML_MSG = "服务返回了网页而不是 JSON（常见原因：网关/前端反代超时，或 API 正在重启导致连接被重置）。请稍后重试；若刚部署过，等几秒再问一次。";
 
 function looksLikeHtml(text: string): boolean {
   const t = text.trim();
