@@ -4,6 +4,9 @@
  *
  * Query side strips Chinese question templates / stop phrases so FTS and
  * lexical scoring prefer content tokens (感情) over template bigrams (什么/么是).
+ *
+ * Query-side covering bigrams drop interior bridge tokens (索二) that only exist
+ * when a multi-character run is contiguous; index-side still stores all overlaps.
  */
 
 const CJK = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
@@ -30,31 +33,79 @@ export const CJK_QUERY_STOP_PHRASES = [
 
 let stopBigramCache: Set<string> | null = null;
 
-function tokenizeRaw(text: string): string[] {
+type TokenRun =
+  | { kind: "cjk"; run: string }
+  | { kind: "latin"; token: string };
+
+/** Split text into CJK runs and latin tokens (punctuation skipped). */
+function lexRuns(text: string): TokenRun[] {
   const s = text.normalize("NFKC");
-  const out: string[] = [];
+  const out: TokenRun[] = [];
   let i = 0;
   while (i < s.length) {
     const ch = s[i]!;
     if (CJK.test(ch)) {
       let j = i;
       while (j < s.length && CJK.test(s[j]!)) j++;
-      const run = s.slice(i, j);
-      if (run.length === 1) out.push(run);
-      else {
-        for (let k = 0; k < run.length - 1; k++) out.push(run.slice(k, k + 2));
-      }
+      out.push({ kind: "cjk", run: s.slice(i, j) });
       i = j;
       continue;
     }
     if (/[A-Za-z0-9_]/.test(ch)) {
       let j = i;
       while (j < s.length && /[A-Za-z0-9_]/.test(s[j]!)) j++;
-      out.push(s.slice(i, j).toLowerCase());
+      out.push({ kind: "latin", token: s.slice(i, j).toLowerCase() });
       i = j;
       continue;
     }
     i++;
+  }
+  return out;
+}
+
+/** Index-side: all overlapping bigrams for a CJK run. */
+function overlappingBigrams(run: string): string[] {
+  if (run.length === 0) return [];
+  if (run.length === 1) return [run];
+  const out: string[] = [];
+  for (let k = 0; k < run.length - 1; k++) out.push(run.slice(k, k + 2));
+  return out;
+}
+
+/**
+ * Query-side covering bigrams for a CJK run.
+ * Keep even-index overlapping bigrams plus the final bigram so the run stays
+ * covered end-to-end, but drop interior bridge bigrams (e.g. 索二 in 搜索二叉树)
+ * that rarely appear unless the whole run is contiguous in the document.
+ */
+export function coveringBigrams(run: string): string[] {
+  if (run.length === 0) return [];
+  if (run.length === 1) return [run];
+  if (run.length === 2) return [run];
+  const all = overlappingBigrams(run);
+  const keep = new Set<number>();
+  for (let i = 0; i < all.length; i += 2) keep.add(i);
+  keep.add(all.length - 1);
+  return [...keep]
+    .sort((a, b) => a - b)
+    .map((i) => all[i]!);
+}
+
+function tokenizeRaw(text: string): string[] {
+  const out: string[] = [];
+  for (const part of lexRuns(text)) {
+    if (part.kind === "latin") out.push(part.token);
+    else out.push(...overlappingBigrams(part.run));
+  }
+  return out;
+}
+
+/** Query-side tokens: covering bigrams per CJK run (bridges dropped). */
+function tokenizeQuery(text: string): string[] {
+  const out: string[] = [];
+  for (const part of lexRuns(text)) {
+    if (part.kind === "latin") out.push(part.token);
+    else out.push(...coveringBigrams(part.run));
   }
   return out;
 }
@@ -110,16 +161,17 @@ export function stripCjkQueryStops(query: string): string {
  * Content-bearing query tokens for search / ask.
  * Prefers tokens after stop-phrase stripping; falls back to all tokens minus
  * stop bigrams; finally to raw tokens if the query is only templates.
+ * Uses covering bigrams (not full overlaps) so bridge tokens are not required.
  */
 export function queryContentTokens(query: string): string[] {
   const stripped = stripCjkQueryStops(query);
   const fromStripped = uniquePreserve(
-    tokenizeRaw(stripped).map(sanitizeToken).filter(Boolean),
+    tokenizeQuery(stripped).map(sanitizeToken).filter(Boolean),
   );
   if (fromStripped.length > 0) return fromStripped;
 
   const stops = cjkStopBigrams();
-  const all = uniquePreserve(tokenizeRaw(query).map(sanitizeToken).filter(Boolean));
+  const all = uniquePreserve(tokenizeQuery(query).map(sanitizeToken).filter(Boolean));
   const withoutStops = all.filter((t) => !stops.has(t));
   return withoutStops.length > 0 ? withoutStops : all;
 }
@@ -130,8 +182,10 @@ export function isCjkStopToken(token: string): boolean {
 }
 
 /**
- * Build a `simple` to_tsquery fragment: AND of content tokens only.
- * Avoids requiring stop bigrams like 什么 & 么是 when asking「什么是感情」.
+ * Build a `simple` to_tsquery fragment from content tokens.
+ * Covering bigrams are AND-ed; interior bridges like 索二 are omitted so
+ * 「搜索二叉树」does not require a rare contiguous bridge token.
+ * Stop phrases remain stripped (什么是感情 → 感情).
  */
 export function toTsQueryTokens(query: string): string {
   const tokens = queryContentTokens(query);
