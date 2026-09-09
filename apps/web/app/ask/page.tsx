@@ -66,6 +66,8 @@ type RevealState = {
   /** Filtered/numbered cards for the retrieve animation. */
   displayCitations: DisplayCitation[];
   answer: string;
+  /** User question that produced this reveal */
+  query?: string;
   mode?: string | null;
   ai_failed?: boolean;
   ai_error?: string | null;
@@ -75,7 +77,15 @@ type RevealState = {
 
 const ASK_TIMEOUT_MS = 180_000;
 const SOURCES_OPEN_KEY = "note-hub:ask-sources-open";
-const RETRIEVE_STEP_MS = 620;
+const RETRIEVE_STEP_MS = 680;
+const FOLD_HOLD_MS = 720;
+const PIPELINE_STAGES = [
+  { id: "parse", label: "解析问题 / 提取关键词" },
+  { id: "index", label: "检索笔记索引" },
+  { id: "match", label: "对照相关片段" },
+  { id: "answer", label: "生成回答" },
+] as const;
+const PIPELINE_STEP_MS = 1400;
 
 function shelfHref(c: Citation): string | null {
   if (!c.connection_id || !c.path) return null;
@@ -135,6 +145,68 @@ function selectDisplayCitations(
   return preferred.length ? preferred : indexed;
 }
 
+
+/** Lightweight client check: few usable cites or thin CJK/Latin overlap with the question. */
+function isWeakEvidence(query: string | null | undefined, citations: DisplayCitation[]): boolean {
+  if (!citations.length) return true;
+  const q = (query || "").trim();
+  if (!q) return citations.length <= 1;
+  const qChars = new Set(
+    q
+      .toLowerCase()
+      .replace(/[\s\p{P}\p{S}]+/gu, "")
+      .split("")
+      .filter((ch) => /[\u3400-\u9fffA-Za-z0-9]/.test(ch)),
+  );
+  if (!qChars.size) return citations.length <= 1;
+  let best = 0;
+  for (const c of citations) {
+    const blob = `${c.title || ""} ${c.quote || ""}`.toLowerCase();
+    let hit = 0;
+    for (const ch of qChars) if (blob.includes(ch)) hit++;
+    best = Math.max(best, hit / qChars.size);
+  }
+  return best < 0.28 || citations.length <= 1;
+}
+
+function AskRetrievePipeline({ reduced }: { reduced: boolean | null }) {
+  const [stage, setStage] = useState(0);
+  useEffect(() => {
+    if (reduced) {
+      setStage(PIPELINE_STAGES.length - 1);
+      return;
+    }
+    setStage(0);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    for (let i = 1; i < PIPELINE_STAGES.length; i++) {
+      timers.push(setTimeout(() => setStage(i), PIPELINE_STEP_MS * i));
+    }
+    return () => {
+      for (const t of timers) clearTimeout(t);
+    };
+  }, [reduced]);
+
+  return (
+    <div className="ask-pipeline" aria-busy="true" aria-live="polite">
+      <p className="ask-pipeline-kicker">检索过程</p>
+      <ol className="ask-pipeline-steps">
+        {PIPELINE_STAGES.map((s, i) => {
+          const state = i < stage ? "done" : i === stage ? "active" : "pending";
+          return (
+            <li key={s.id} className={`ask-pipeline-step ask-pipeline-step-${state}`} data-state={state}>
+              <span className="ask-pipeline-dot" aria-hidden="true" />
+              <span className="ask-pipeline-label">{s.label}</span>
+              {state === "active" ? <span className="ask-pipeline-pulse" aria-hidden="true" /> : null}
+              {state === "done" ? <span className="ask-pipeline-check" aria-hidden="true">✓</span> : null}
+            </li>
+          );
+        })}
+      </ol>
+      <p className="ask-pipeline-hint muted">{PIPELINE_STAGES[Math.min(stage, PIPELINE_STAGES.length - 1)].label}…</p>
+    </div>
+  );
+}
+
 function useSourcesOpenPref(): [boolean, (v: boolean) => void] {
   // Always start collapsed (history + post-scan). Ignore stale localStorage open=1.
   const [open, setOpen] = useState(false);
@@ -158,24 +230,25 @@ function useSourcesOpenPref(): [boolean, (v: boolean) => void] {
 
 function CitationsBlock({
   citations,
-  allCitations,
   reduced,
   scanning,
   activeIndex,
   forceOpen,
+  query,
 }: {
   citations: DisplayCitation[];
-  /** Full 【n】 index list (unfiltered) for hover quote sync */
-  allCitations?: Citation[];
   reduced: boolean | null;
   /** Step-through retrieve animation */
   scanning?: boolean;
   activeIndex?: number;
   /** While scanning, keep body open */
   forceOpen?: boolean;
+  /** Original question — for weak-evidence hint */
+  query?: string | null;
 }) {
   const [prefOpen, setPrefOpen] = useSourcesOpenPref();
   const wasScanning = useRef(false);
+  // Never auto-open on cite hover / activeN — only scan forceOpen or user pref.
   const open = forceOpen || scanning ? true : prefOpen;
   const panelId = useId();
   const { activeN } = useCiteActive();
@@ -189,12 +262,13 @@ function CitationsBlock({
     wasScanning.current = Boolean(scanning);
   }, [scanning, setPrefOpen]);
 
+  // Only scroll when the accordion is already open — never while collapsed
+  // (scrollIntoView on collapsed/hidden cards reflows and feeds hover flicker).
   useEffect(() => {
-    if (activeN == null || scanning) return;
+    if (activeN == null || scanning || !open) return;
     const el = cardRefs.current.get(activeN);
-    if (el && open) {
-      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    }
+    if (!el) return;
+    el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [activeN, scanning, open]);
 
   if (!citations.length) {
@@ -205,14 +279,9 @@ function CitationsBlock({
     ? citations.slice(0, Math.max(0, (activeIndex ?? 0) + 1))
     : citations;
 
-  const hoverCite = (() => {
-    if (scanning || activeN == null || activeN < 1) return null;
-    const fromDisplay = citations.find((c) => c.n === activeN);
-    if (fromDisplay) return fromDisplay;
-    const raw = allCitations?.[activeN - 1];
-    if (!raw) return null;
-    return { ...raw, n: activeN };
-  })();
+  // Hover quote lives in the fixed portal popover on 【n】 marks.
+  // Chip highlight only — never expand an in-flow strip (that pushes the answer).
+  const weak = !scanning && isWeakEvidence(query, citations);
 
   return (
     <div className={`ask-cites${scanning ? " ask-cites-scanning" : ""}`}>
@@ -226,9 +295,9 @@ function CitationsBlock({
               <motion.div
                 key={`chip-${c.n}-${c.note_id}-${c.source_block_id || c.block_id}`}
                 layout
-                initial={scanning && !reduced ? { opacity: 0, y: 18, scale: 0.82 } : false}
+                initial={scanning && !reduced ? { opacity: 0, y: 14, scale: 0.88 } : false}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={reduced ? undefined : { opacity: 0, scale: 0.94 }}
+                exit={reduced ? undefined : { opacity: 0, scale: 0.96 }}
                 transition={scanning ? springPop : springSnap}
                 whileHover={reduced ? undefined : { y: -1, scale: 1.02 }}
                 whileTap={reduced ? undefined : { scale: 0.97 }}
@@ -248,34 +317,11 @@ function CitationsBlock({
         </AnimatePresence>
       </div>
 
-      <AnimatePresence initial={false}>
-        {hoverCite ? (
-          <motion.div
-            key={`hq-${hoverCite.n}`}
-            className="cite-chip-quote"
-            role="status"
-            initial={reduced ? false : { opacity: 0, y: -4, height: 0 }}
-            animate={{ opacity: 1, y: 0, height: "auto" }}
-            exit={reduced ? undefined : { opacity: 0, y: -2, height: 0 }}
-            transition={{ duration: reduced ? 0 : 0.22, ease: easeOutExpo }}
-            style={{ overflow: "hidden" }}
-          >
-            <div className="cite-chip-quote-head">
-              <span className="cite-chip-n" aria-hidden="true">
-                {hoverCite.n}
-              </span>
-              <strong>{decodeSegment(hoverCite.title) || "未命名"}</strong>
-            </div>
-            {hoverCite.quote ? (
-              <p className="cite-chip-quote-body">
-                <mark className="cite-hl">{hoverCite.quote}</mark>
-              </p>
-            ) : (
-              <p className="cite-chip-quote-body muted">暂无摘录</p>
-            )}
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
+      {weak ? (
+        <p className="ask-weak-pill" role="status">
+          依据较弱 · 笔记重合不多，回答请对照原文斟酌
+        </p>
+      ) : null}
 
       <div className="ask-cites-toggle-row">
         <button
@@ -308,7 +354,7 @@ function CitationsBlock({
             initial={reduced ? false : { height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={reduced ? undefined : { height: 0, opacity: 0 }}
-            transition={{ duration: reduced ? 0 : 0.42, ease: easeOutExpo }}
+            transition={{ duration: reduced ? 0 : 0.55, ease: easeOutExpo }}
             style={{ overflow: "hidden" }}
           >
             <div className="cite-stack">
@@ -329,15 +375,19 @@ function CitationsBlock({
                       className={`cite-card${active ? " cite-card-active" : ""}`}
                       initial={
                         scanning && !reduced
-                          ? { opacity: 0, y: 32, scale: 0.84 }
+                          ? { opacity: 0, y: 22, scale: 0.9 }
                           : reduced
                             ? false
                             : { opacity: 0, y: 8 }
                       }
                       animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={reduced ? undefined : { opacity: 0, y: -6, scale: 0.98 }}
-                      transition={scanning ? springPop : springSoft}
-                      whileHover={reduced || scanning ? undefined : { y: -2 }}
+                      exit={reduced ? undefined : { opacity: 0, y: -4, scale: 0.98 }}
+                      transition={
+                        scanning
+                          ? springPop
+                          : { duration: reduced ? 0 : 0.38, ease: easeOutExpo }
+                      }
+                      whileHover={reduced || scanning ? undefined : { y: -1 }}
                     >
                       <Link href={citeHref(c)} className="cite-card-main">
                         <div className="cite-card-head">
@@ -378,6 +428,7 @@ function AssistantBody({
   reduced,
   scanning,
   activeIndex,
+  query,
 }: {
   content: string | null;
   citations: Citation[];
@@ -389,6 +440,8 @@ function AssistantBody({
   reduced: boolean | null;
   scanning?: boolean;
   activeIndex?: number;
+  /** Paired user question for weak-evidence hint */
+  query?: string | null;
 }) {
   const displayCites =
     displayCitations ?? selectDisplayCitations(citations, content);
@@ -414,11 +467,11 @@ function AssistantBody({
             <p className="ask-section-label">检索</p>
             <CitationsBlock
               citations={displayCites}
-              allCitations={citations}
               reduced={reduced}
               scanning={scanning}
               activeIndex={activeIndex}
               forceOpen={scanning}
+              query={query}
             />
           </section>
         ) : !scanning && content != null ? (
@@ -644,7 +697,7 @@ export default function AskPage() {
           setReveal((prev) => (prev && prev.id === payload.id ? null : prev));
         }, 160);
       });
-    }, step * display.length + 640);
+    }, step * display.length + FOLD_HOLD_MS);
     revealTimers.current.push(done);
   }
 
@@ -691,6 +744,7 @@ export default function AskPage() {
           id: revealId,
           citations: cites,
           answer: res.answer_markdown,
+          query,
           mode: res.mode ?? null,
           ai_failed: Boolean(res.ai_failed),
           ai_error: res.ai_error ?? null,
@@ -830,6 +884,9 @@ export default function AskPage() {
                 return null;
               }
               const cites = normalizeCitations(m.citations);
+              const prevUser = [...messages.slice(0, messages.indexOf(m))]
+                .reverse()
+                .find((x) => x.role === "user");
               return (
                 <motion.div
                   key={m.id}
@@ -845,6 +902,7 @@ export default function AskPage() {
                     aiFailed={Boolean(m.ai_failed)}
                     aiError={m.ai_error}
                     reduced={reduced}
+                    query={prevUser?.content}
                   />
                 </motion.div>
               );
@@ -868,20 +926,12 @@ export default function AskPage() {
                   reduced={reduced}
                   scanning={reveal.phase === "retrieve"}
                   activeIndex={reveal.activeIndex}
+                  query={reveal.query}
                 />
               </motion.div>
             ) : null}
 
-            {busy ? (
-              <div className="hub-state hub-state-loading" aria-busy="true" aria-live="polite">
-                <div className="hub-pulse" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-                <p>正在从笔记里检索…</p>
-              </div>
-            ) : null}
+            {busy ? <AskRetrievePipeline reduced={reduced} /> : null}
 
             {err ? (
               <div className="hub-state hub-state-error" role="alert">

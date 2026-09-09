@@ -1124,38 +1124,18 @@ blockquote.ask-quote {
   background: color-mix(in srgb, var(--moss-wash) 70%, var(--paper));
   box-shadow: var(--shadow);
 }
-.cite-chip-quote {
-  margin: -0.35rem 0 0.65rem;
-  padding: 0.55rem 0.7rem 0.6rem;
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--paper) 82%, var(--moss-wash));
-  animation: cite-pop-in 220ms var(--ease) both;
-}
-.cite-chip-quote-head {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin-bottom: 0.25rem;
-}
-.cite-chip-quote-head strong {
-  font-size: 0.8125rem;
-  font-family: var(--font-display);
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.cite-chip-quote-body {
-  margin: 0;
-  font-size: 0.8125rem;
-  line-height: 1.5;
-  color: color-mix(in srgb, var(--ink) 72%, var(--muted));
-  max-height: 5.5rem;
-  overflow: auto;
-}
-@media (prefers-reduced-motion: reduce) {
-  .cite-chip-quote { animation: none; }
+/* In-flow cite-chip-quote removed — hover quote is portal-only (no answer jump). */
+.ask-weak-pill {
+  margin: 0.15rem 0 0.45rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #c4a35a 35%, var(--line));
+  background: color-mix(in srgb, #e8b84a 14%, var(--paper));
+  color: color-mix(in srgb, var(--ink) 78%, #8a6a20);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  width: fit-content;
+  max-width: 100%;
 }
 .cite-card-active {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
@@ -1181,9 +1161,9 @@ blockquote.ask-quote {
   pointer-events: none;
 }
 @keyframes ask-scan-beam {
-  0% { transform: translateY(0.4rem); opacity: 0; }
-  22% { opacity: 0.95; }
-  100% { transform: translateY(4.6rem); opacity: 0; }
+  0% { transform: translateY(0.35rem); opacity: 0; }
+  18% { opacity: 0.85; }
+  100% { transform: translateY(4.2rem); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .ask-cites-scanning .cite-card-active::after { animation: none; opacity: 0; }
@@ -1242,8 +1222,8 @@ blockquote.ask-quote {
   margin: 0 0.08em;
   /* Keep superscript from inflating line-box; pad for easier hover */
   line-height: 0;
-  padding: 0.35em 0.2em;
-  margin-inline: -0.1em;
+  padding: 0.55em 0.35em;
+  margin-inline: -0.15em;
   position: relative;
   z-index: 2;
 }
@@ -1292,18 +1272,31 @@ blockquote.ask-quote {
 }
 .cite-pop {
   position: fixed;
-  z-index: 1200;
+  z-index: 1400;
   padding: 0.7rem 0.8rem 0.65rem;
   background: var(--paper);
   border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
   border-radius: 12px;
   box-shadow: var(--shadow-lift);
   color: var(--ink);
-  max-width: min(20rem, calc(100vw - 1rem));
+  max-width: min(21rem, calc(100vw - 1rem));
   animation: cite-pop-in 240ms var(--ease) both;
+  pointer-events: auto;
 }
 .cite-pop-above {
   transform-origin: bottom center;
+}
+.cite-pop-bridge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 14px;
+  /* Sits between mark and pop so mouse can cross without leave */
+  top: -14px;
+}
+.cite-pop-above .cite-pop-bridge {
+  top: auto;
+  bottom: -14px;
 }
 @keyframes cite-pop-in {
   from { opacity: 0; transform: translateY(8px) scale(0.97); }
@@ -1353,6 +1346,93 @@ blockquote.ask-quote {
   .cite-pop { animation: none; }
 }
 
+
+
+/* Ask retrieve pipeline — visible stages while waiting on /ask */
+.ask-pipeline {
+  margin: 0.35rem 0 0.55rem;
+  padding: 0.85rem 1rem 0.9rem;
+  background: color-mix(in srgb, var(--paper) 88%, var(--moss-wash));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: calc(var(--radius) + 2px);
+  box-shadow: var(--shadow);
+}
+.ask-pipeline-kicker {
+  margin: 0 0 0.55rem;
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--accent) 70%, var(--muted));
+  font-family: var(--font-display);
+}
+.ask-pipeline-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.ask-pipeline-step {
+  display: grid;
+  grid-template-columns: 0.7rem 1fr auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 1.35rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+  transition: color 220ms var(--ease);
+}
+.ask-pipeline-step-done { color: color-mix(in srgb, var(--ink) 70%, var(--muted)); }
+.ask-pipeline-step-active {
+  color: var(--ink);
+  font-weight: 560;
+}
+.ask-pipeline-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 70%, var(--muted));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--line) 45%, transparent);
+}
+.ask-pipeline-step-done .ask-pipeline-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.ask-pipeline-step-active .ask-pipeline-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 28%, transparent);
+  animation: ask-pipeline-glow 1.2s var(--ease) infinite;
+}
+.ask-pipeline-label { min-width: 0; }
+.ask-pipeline-check {
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+.ask-pipeline-pulse {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  animation: ask-pipeline-pulse 1s var(--ease) infinite;
+}
+.ask-pipeline-hint {
+  margin: 0.65rem 0 0;
+  font-size: 0.8125rem;
+}
+@keyframes ask-pipeline-glow {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 16%, transparent); }
+}
+@keyframes ask-pipeline-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ask-pipeline-step-active .ask-pipeline-dot,
+  .ask-pipeline-pulse { animation: none; }
+}
 
 .ask-page { max-width: 72rem; }
 .ask-layout {

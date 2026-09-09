@@ -141,7 +141,7 @@ function CitationMark({ n, citation }: { n: number; citation: CiteRef }) {
 
   const scheduleClose = () => {
     clearClose();
-    closeTimer.current = setTimeout(() => setOpen(false), 320);
+    closeTimer.current = setTimeout(() => setOpen(false), 300);
   };
 
   const place = useCallback(() => {
@@ -149,7 +149,7 @@ function CitationMark({ n, citation }: { n: number; citation: CiteRef }) {
     if (!el) return;
     const r = el.getBoundingClientRect();
     const pad = 8;
-    const popW = Math.min(320, window.innerWidth - pad * 2);
+    const popW = Math.min(340, window.innerWidth - pad * 2);
     let left = r.left + r.width / 2 - popW / 2;
     left = Math.max(pad, Math.min(left, window.innerWidth - popW - pad));
     const below = r.bottom + 8;
@@ -256,10 +256,13 @@ function CitationMark({ n, citation }: { n: number; citation: CiteRef }) {
                 bottom: coords.above ? window.innerHeight - coords.top : undefined,
                 left: coords.left,
                 width: coords.width,
+                zIndex: 1400,
               }}
               onMouseEnter={clearClose}
               onMouseLeave={scheduleClose}
             >
+              {/* Invisible bridge so cursor can travel mark → pop without closing */}
+              <span className="cite-pop-bridge" aria-hidden="true" />
               <div className="cite-pop-head">
                 <span className="cite-chip-n" aria-hidden="true">
                   {n}
