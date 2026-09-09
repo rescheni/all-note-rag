@@ -199,7 +199,7 @@ export async function hybridRetrieve(
   opts: HybridRetrieveOpts = {},
 ): Promise<HybridRetrieveResult> {
   const q = queryText.trim();
-  const limit = opts.limit ?? 8;
+  const limit = opts.limit ?? 12;
   if (!q) return { unknown: true, hits: [] };
 
   const fetchLimit = Math.max(limit * 5, 40);

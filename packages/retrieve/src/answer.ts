@@ -67,7 +67,7 @@ export function composeExtractiveAnswer(query: string, hits: RetrieveHit[]): Ask
   if (!hits.length) {
     return { unknown: true, answer_markdown: UNKNOWN_ANSWER, citations: [], mode: "extractive" };
   }
-  const used = uniqueRetrieveHits(hits).slice(0, 5);
+  const used = uniqueRetrieveHits(hits).slice(0, 12);
   const lines: string[] = [`根据当前空间笔记，与「${query.trim()}」相关的参考如下（摘录，供进一步理解）：`, ""];
   for (const h of used) {
     lines.push(`**${h.title}**`);

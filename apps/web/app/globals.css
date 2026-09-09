@@ -1917,6 +1917,39 @@ input[type="radio"], input[type="checkbox"] { width: auto; margin-right: 0.35rem
   margin: 1rem 0;
 }
 .ask-md a { color: var(--accent, #5e8a68); }
+.ask-md-table-wrap {
+  margin: 0.65rem 0 0.85rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--paper) 92%, var(--moss-wash));
+}
+.ask-md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+.ask-md-table th,
+.ask-md-table td {
+  padding: 0.45rem 0.65rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+}
+.ask-md-table th {
+  font-weight: 650;
+  font-family: var(--font-display);
+  background: color-mix(in srgb, var(--moss-wash) 55%, var(--paper));
+  color: var(--ink);
+  white-space: nowrap;
+}
+.ask-md-table tr:last-child td { border-bottom: 0; }
+.ask-md-table td { color: var(--ink); }
+.cite-mark + .cite-mark-wrap,
+.cite-mark-wrap + .cite-mark-wrap { margin-left: 0.12em; }
+
 
 .path-crumbs .is-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;

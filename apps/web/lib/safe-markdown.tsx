@@ -3,17 +3,8 @@
 import { Fragment, type ReactNode } from "react";
 import { splitCiteMarks, type CiteRef } from "./cite-marks";
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function inline(md: string, citations: CiteRef[] | undefined, keyBase: string): ReactNode[] {
   const out: ReactNode[] = [];
-  // code `…`, **bold**, *em*, [label](url), plain (may contain 【n】)
   const re = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[([^\]]+)\]\(([^)]+)\)|[^*`\[]+)/g;
   let i = 0;
   let m: RegExpExecArray | null;
@@ -55,10 +46,28 @@ function inline(md: string, citations: CiteRef[] | undefined, keyBase: string): 
   return out;
 }
 
+function isTableSep(line: string): boolean {
+  const t = line.trim();
+  if (!t.includes("|")) return false;
+  // | --- | :---: | ---: |
+  return /^\|?[\s:|-]+\|[\s:|-]*\|?$/.test(t) && /---/.test(t);
+}
+
+function isTableRow(line: string): boolean {
+  const t = line.trim();
+  return t.includes("|") && !isTableSep(t);
+}
+
+function splitCells(line: string): string[] {
+  let t = line.trim();
+  if (t.startsWith("|")) t = t.slice(1);
+  if (t.endsWith("|")) t = t.slice(0, -1);
+  return t.split("|").map((c) => c.trim());
+}
+
 /**
- * Small safe markdown subset for ask answers: headings, lists, quotes, hr, bold/italic/code/links.
- * Optional citations turn 【n】 into interactive superscripts.
- * No raw HTML.
+ * Safe markdown for ask answers: headings, lists, quotes, hr, code, GFM tables,
+ * bold/italic/links. Optional 【n】 citation marks. No raw HTML.
  */
 export function SafeMarkdown({
   source,
@@ -92,6 +101,44 @@ export function SafeMarkdown({
       i += 1;
       continue;
     }
+    // GFM table: header row + separator, then body rows
+    if (
+      isTableRow(line) &&
+      i + 1 < lines.length &&
+      isTableSep(lines[i + 1] ?? "")
+    ) {
+      const header = splitCells(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && isTableRow(lines[i] ?? "")) {
+        rows.push(splitCells(lines[i] ?? ""));
+        i += 1;
+      }
+      const tKey = key++;
+      blocks.push(
+        <div key={tKey} className="ask-md-table-wrap">
+          <table className="ask-md-table">
+            <thead>
+              <tr>
+                {header.map((cell, ci) => (
+                  <th key={ci}>{inline(cell, citations, `th${tKey}-${ci}`)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ri) => (
+                <tr key={ri}>
+                  {header.map((_, ci) => (
+                    <td key={ci}>{inline(row[ci] ?? "", citations, `td${tKey}-${ri}-${ci}`)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
     if (/^>\s?/.test(line)) {
       const quote: string[] = [];
       while (i < lines.length && /^>\s?/.test(lines[i] ?? "")) {
@@ -111,7 +158,10 @@ export function SafeMarkdown({
     if (/^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) {
       const ordered = /^\d+\.\s+/.test(line);
       const items: string[] = [];
-      while (i < lines.length && (ordered ? /^\d+\.\s+/.test(lines[i] ?? "") : /^[-*]\s+/.test(lines[i] ?? ""))) {
+      while (
+        i < lines.length &&
+        (ordered ? /^\d+\.\s+/.test(lines[i] ?? "") : /^[-*]\s+/.test(lines[i] ?? ""))
+      ) {
         items.push((lines[i] ?? "").replace(ordered ? /^\d+\.\s+/ : /^[-*]\s+/, ""));
         i += 1;
       }
@@ -150,15 +200,25 @@ export function SafeMarkdown({
       !/^[-*]\s+/.test(lines[i] ?? "") &&
       !/^\d+\.\s+/.test(lines[i] ?? "") &&
       !/^---+$/.test((lines[i] ?? "").trim()) &&
-      !(lines[i] ?? "").startsWith("```")
+      !(lines[i] ?? "").startsWith("```") &&
+      !(
+        isTableRow(lines[i] ?? "") &&
+        i + 1 < lines.length &&
+        isTableSep(lines[i + 1] ?? "")
+      ) &&
+      !isTableRow(lines[i] ?? "")
     ) {
       para.push(lines[i] ?? "");
       i += 1;
     }
+    // orphan table-looking single lines: still as paragraph
+    if (!para.length && isTableRow(line)) {
+      para.push(line);
+      i += 1;
+    }
+    if (!para.length) continue;
     const pKey = key++;
     blocks.push(<p key={pKey}>{inline(para.join(" "), citations, `p${pKey}`)}</p>);
   }
   return <div className="ask-md">{blocks}</div>;
 }
-
-void escapeHtml;

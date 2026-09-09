@@ -257,6 +257,8 @@ askRoutes.post("/spaces/:id/ask", async (c) => {
       queryEmbedding,
       userId: user.id,
       role: gate.mem.role,
+    ,
+      limit: 12,
     }),
     growthOnAsk(spaceId, user.id, q),
     writingHealthOnAsk(spaceId, user.id, q),

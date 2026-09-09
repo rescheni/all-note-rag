@@ -122,9 +122,9 @@ function isUsableCitation(c: Citation): boolean {
 type DisplayCitation = Citation & { n: number };
 
 /**
- * Prefer citations referenced by 【n】 in the answer when present;
- * always skip empty/garbled quotes. `n` keeps the original 1-based index
- * so hover marks stay aligned with the answer.
+ * Show ALL usable retrieved sources (not only those named in 【n】).
+ * Cited ones sort first so scan highlights answer-backed notes early.
+ * `n` keeps the original 1-based index for hover marks.
  */
 function selectDisplayCitations(
   citations: Citation[],
@@ -141,12 +141,47 @@ function selectDisplayCitations(
     if (n >= 1 && n <= citations.length) refs.add(n);
   }
   if (!refs.size) return indexed;
-  const preferred = indexed.filter((c) => refs.has(c.n));
-  return preferred.length ? preferred : indexed;
+  const cited = indexed.filter((c) => refs.has(c.n));
+  const rest = indexed.filter((c) => !refs.has(c.n));
+  return [...cited, ...rest];
 }
 
 
 /** Lightweight client check: few usable cites or thin CJK/Latin overlap with the question. */
+
+function searchHitsToCitations(
+  results: Array<{
+    note_id?: string;
+    title?: string;
+    snippet?: string | null;
+    path?: string;
+    connection_id?: string;
+    source_block_id?: string | null;
+    preview_url?: string;
+  }>,
+): Citation[] {
+  const out: Citation[] = [];
+  for (const r of results) {
+    if (!r?.note_id) continue;
+    // Skip obvious asset noise in early scan
+    const title = (r.title || "").trim();
+    if (/\.(png|jpe?g|gif|webp|svg)$/i.test(title)) continue;
+    const c: Citation = {
+      note_id: r.note_id,
+      block_id: r.source_block_id || "",
+      source_block_id: r.source_block_id || "",
+      title,
+      quote: String(r.snippet || "").replace(/\s+/g, " ").trim().slice(0, 220),
+      preview_url: r.preview_url || `/notes/${r.note_id}`,
+      path: r.path || "",
+      connection_id: r.connection_id || "",
+    };
+    if (isUsableCitation(c)) out.push(c);
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
 function isWeakEvidence(query: string | null | undefined, citations: DisplayCitation[]): boolean {
   if (!citations.length) return true;
   const q = (query || "").trim();
@@ -726,6 +761,56 @@ export default function AskPage() {
     ]);
     form.reset();
 
+    const revealId = `reveal-${Date.now()}`;
+    let earlyScanStarted = false;
+
+    // Kick search in parallel so source cards can appear during the wait,
+    // instead of only after the fake pipeline + ask both finish.
+    const searchP = api<{
+      results?: Array<{
+        note_id?: string;
+        title?: string;
+        snippet?: string | null;
+        path?: string;
+        connection_id?: string;
+        source_block_id?: string | null;
+        preview_url?: string;
+      }>;
+    }>(`/v1/spaces/${space.id}/search?q=${encodeURIComponent(query)}`)
+      .then((out) => {
+        const early = searchHitsToCitations(out.results ?? []);
+        if (!early.length || earlyScanStarted) return;
+        earlyScanStarted = true;
+        const display = selectDisplayCitations(early, null);
+        setBusy(false);
+        setReveal({
+          id: revealId,
+          citations: early,
+          displayCitations: display,
+          answer: "",
+          query,
+          mode: null,
+          ai_failed: false,
+          ai_error: null,
+          phase: "retrieve",
+          activeIndex: 0,
+        });
+        const step = RETRIEVE_STEP_MS;
+        for (let i = 1; i < display.length; i++) {
+          const t = setTimeout(() => {
+            setReveal((prev) =>
+              prev && prev.id === revealId && prev.phase === "retrieve" && !prev.answer
+                ? { ...prev, activeIndex: i }
+                : prev,
+            );
+          }, step * i);
+          revealTimers.current.push(t);
+        }
+      })
+      .catch(() => {
+        /* search is best-effort for early scan */
+      });
+
     try {
       const res = await api<AskOut>(`/v1/spaces/${space.id}/ask`, {
         method: "POST",
@@ -736,10 +821,10 @@ export default function AskPage() {
         }),
         timeoutMs: ASK_TIMEOUT_MS,
       });
+      await Promise.race([searchP, new Promise((r) => setTimeout(r, 0))]);
       const tid = res.thread_id ?? threadId;
       if (tid) setThreadId(tid);
       const cites = res.citations ?? [];
-      const revealId = `reveal-${Date.now()}`;
 
       runRetrieveThenAnswer(
         {
@@ -760,6 +845,7 @@ export default function AskPage() {
       setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
       setErr(er instanceof Error ? er.message : "提问失败");
       setBusy(false);
+      setReveal(null);
     }
   }
 
