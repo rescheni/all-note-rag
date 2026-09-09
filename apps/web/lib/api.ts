@@ -31,6 +31,8 @@ export function getToken(): string | null {
   return localStorage.getItem("hub_token");
 }
 
+export const ME_CHANGE_EVENT = "hub-me-change";
+
 export function setToken(token: string | null) {
   if (typeof window === "undefined") return;
   if (token) localStorage.setItem("hub_token", token);

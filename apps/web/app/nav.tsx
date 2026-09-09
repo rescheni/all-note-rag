@@ -2,7 +2,7 @@
 import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, getToken, setToken } from "@/lib/api";
+import { api, getToken, setToken, ME_CHANGE_EVENT } from "@/lib/api";
 import { getStoredSpaceId, SPACE_CHANGE_EVENT } from "@/lib/space";
 import {
   IconAsk,
@@ -88,15 +88,20 @@ export function Nav() {
       return;
     }
     let cancelled = false;
-    api<{ user: MeUser }>("/v1/me")
-      .then((r) => {
-        if (!cancelled) setMe(r.user);
-      })
-      .catch(() => {
-        if (!cancelled) setMe(null);
-      });
+    const loadMe = () => {
+      api<{ user: MeUser }>("/v1/me")
+        .then((r) => {
+          if (!cancelled) setMe(r.user);
+        })
+        .catch(() => {
+          if (!cancelled) setMe(null);
+        });
+    };
+    loadMe();
+    window.addEventListener(ME_CHANGE_EVENT, loadMe);
     return () => {
       cancelled = true;
+      window.removeEventListener(ME_CHANGE_EVENT, loadMe);
     };
   }, [authed]);
 

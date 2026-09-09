@@ -1,6 +1,8 @@
 import { Hono } from "hono";
+import { encryptSecret, decryptSecret } from "@note-hub/core";
 import { ensureSkillOnSpace } from "@note-hub/skills-runtime";
 import { query, withTx } from "../db.ts";
+import { env } from "../env.ts";
 import { errors, jsonError } from "../errors.ts";
 import {
   clearSessionCookie,
@@ -12,8 +14,10 @@ import {
   verifyPassword,
   type AuthUser,
 } from "../auth.ts";
+import type { Context } from "hono";
 
 type Vars = { user: AuthUser };
+type AuthCtx = Context<{ Variables: Vars }>;
 
 export const authRoutes = new Hono<{ Variables: Vars }>();
 
@@ -60,6 +64,105 @@ export async function createUser(opts: {
     );
     return { user, space };
   });
+}
+
+function looksLikeEmail(email: string): boolean {
+  // Align with register: require a non-empty local + domain (dot optional for *.local).
+  if (!email.includes("@")) return false;
+  const [local, domain] = email.split("@");
+  return Boolean(local && domain);
+}
+
+async function updateProfile(c: AuthCtx) {
+  const user = c.get("user");
+  const body = await c.req.json().catch(() => ({})) as {
+    display_name?: unknown;
+    email?: unknown;
+  };
+
+  const hasDisplay = Object.prototype.hasOwnProperty.call(body, "display_name");
+  const hasEmail = Object.prototype.hasOwnProperty.call(body, "email");
+  if (!hasDisplay && !hasEmail) {
+    return jsonError(c, 400, "invalid_request", "请提供显示名或登录邮箱");
+  }
+
+  let display_name: string | undefined;
+  if (hasDisplay) {
+    if (typeof body.display_name !== "string") {
+      return jsonError(c, 400, "invalid_request", "显示名不合法");
+    }
+    display_name = body.display_name.trim();
+    if (!display_name) {
+      return jsonError(c, 400, "invalid_request", "显示名不能为空");
+    }
+    if (display_name.length > 64) {
+      return jsonError(c, 400, "invalid_request", "显示名过长（最多 64 字）");
+    }
+  }
+
+  let email: string | undefined;
+  if (hasEmail) {
+    if (typeof body.email !== "string") {
+      return jsonError(c, 400, "invalid_request", "登录邮箱不合法");
+    }
+    email = body.email.trim().toLowerCase();
+    if (!looksLikeEmail(email)) {
+      return jsonError(c, 400, "invalid_request", "登录邮箱格式不正确");
+    }
+    if (email !== user.email) {
+      const exists = await query("SELECT 1 FROM users WHERE email = $1 AND id <> $2", [email, user.id]);
+      if ((exists.rowCount ?? 0) > 0) {
+        return jsonError(c, 409, "conflict", "该登录邮箱已被使用");
+      }
+    }
+  }
+
+  const sets: string[] = [];
+  const params: unknown[] = [user.id];
+  if (display_name !== undefined) {
+    params.push(display_name);
+    sets.push(`display_name = $${params.length}`);
+  }
+  if (email !== undefined) {
+    params.push(email);
+    sets.push(`email = $${params.length}`);
+  }
+  sets.push("updated_at = now()");
+
+  const r = await query<AuthUser>(
+    `UPDATE users SET ${sets.join(", ")} WHERE id = $1
+     RETURNING id, email, display_name`,
+    params,
+  );
+  const updated = r.rows[0];
+  if (!updated) return errors.notFound(c);
+  return c.json({ user: updated });
+}
+
+async function revealToken(c: AuthCtx) {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const r = await query<{
+    id: string;
+    token_ciphertext: string | null;
+    revoked_at: string | null;
+  }>(
+    `SELECT id, token_ciphertext, revoked_at
+     FROM api_tokens
+     WHERE id = $1 AND user_id = $2`,
+    [id, user.id],
+  );
+  const row = r.rows[0];
+  if (!row || row.revoked_at) return errors.notFound(c, "令牌不存在或已撤销");
+  if (!row.token_ciphertext) {
+    return errors.gone(c, "旧令牌无法再显示，请撤销后新建");
+  }
+  try {
+    const token = decryptSecret(row.token_ciphertext, env.hubSecret);
+    return c.json({ token });
+  } catch {
+    return jsonError(c, 500, "decrypt_failed", "令牌解密失败");
+  }
 }
 
 authRoutes.post("/auth/register", async (c) => {
@@ -123,6 +226,9 @@ authRoutes.post("/auth/logout", async (c) => {
   return c.json({ ok: true });
 });
 
+authRoutes.patch("/auth/profile", requireUser, updateProfile);
+authRoutes.post("/auth/profile", requireUser, updateProfile);
+
 authRoutes.post("/auth/password", requireUser, async (c) => {
   const user = c.get("user");
   const body = await c.req.json().catch(() => ({})) as {
@@ -158,8 +264,10 @@ authRoutes.get("/auth/tokens", requireUser, async (c) => {
     token_prefix: string;
     created_at: string;
     last_used_at: string | null;
+    revealable: boolean;
   }>(
-    `SELECT id, name, token_prefix, created_at, last_used_at
+    `SELECT id, name, token_prefix, created_at, last_used_at,
+            (token_ciphertext IS NOT NULL) AS revealable
      FROM api_tokens
      WHERE user_id = $1 AND revoked_at IS NULL
      ORDER BY created_at DESC`,
@@ -174,16 +282,17 @@ authRoutes.post("/auth/tokens", requireUser, async (c) => {
   const name = (body.name ?? "").trim();
   if (!name) return jsonError(c, 400, "invalid_request", "需要令牌名称");
   const { token, prefix, hash } = generateApiToken();
+  const ciphertext = encryptSecret(token, env.hubSecret);
   const r = await query<{
     id: string;
     name: string;
     token_prefix: string;
     created_at: string;
   }>(
-    `INSERT INTO api_tokens (user_id, name, token_prefix, token_hash)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO api_tokens (user_id, name, token_prefix, token_hash, token_ciphertext)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING id, name, token_prefix, created_at`,
-    [user.id, name, prefix, hash],
+    [user.id, name, prefix, hash, ciphertext],
   );
   const row = r.rows[0];
   return c.json(
@@ -193,10 +302,14 @@ authRoutes.post("/auth/tokens", requireUser, async (c) => {
       name: row.name,
       token_prefix: row.token_prefix,
       created_at: row.created_at,
+      revealable: true,
     },
     201,
   );
 });
+
+authRoutes.post("/auth/tokens/:id/reveal", requireUser, revealToken);
+authRoutes.get("/auth/tokens/:id", requireUser, revealToken);
 
 authRoutes.delete("/auth/tokens/:id", requireUser, async (c) => {
   const user = c.get("user");
