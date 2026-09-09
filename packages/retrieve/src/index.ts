@@ -21,6 +21,8 @@ export {
   composeExtractiveAnswer,
   composeAskAnswer,
   citationsFromHits,
+  uniqueRetrieveHits,
+  sanitizeAnswerCitations,
   ChatUpstreamError,
   shortAiError,
   type AskCitation,

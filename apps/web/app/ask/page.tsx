@@ -138,7 +138,7 @@ function selectDisplayCitations(
   const refs = new Set<number>();
   for (const m of answer.matchAll(/【(\d+)】/g)) {
     const n = Number(m[1]);
-    if (n >= 1) refs.add(n);
+    if (n >= 1 && n <= citations.length) refs.add(n);
   }
   if (!refs.size) return indexed;
   const preferred = indexed.filter((c) => refs.has(c.n));

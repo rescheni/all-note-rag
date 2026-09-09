@@ -80,8 +80,8 @@ export function splitCiteMarks(
     const n = Number(m[1]);
     const cite = n >= 1 && n <= citations.length ? citations[n - 1] : undefined;
     if (!cite) {
-      // No matching cite — keep plain text, avoid broken interactive UI.
-      out.push(m[0]);
+      // No matching cite — omit mark text so orphan 【7】 never paints as a chip-like artifact.
+      // (Server sanitizer should already strip these; this is defense for older messages.)
     } else {
       out.push(
         <CitationMark
