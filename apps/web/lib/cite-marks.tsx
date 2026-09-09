@@ -1,10 +1,13 @@
 "use client";
 
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -25,6 +28,38 @@ export type CiteRef = {
 
 const CITE_RE = /【(\d+)】/g;
 
+type CiteActiveApi = {
+  activeN: number | null;
+  setActiveN: (n: number | null) => void;
+};
+
+const CiteActiveContext = createContext<CiteActiveApi | null>(null);
+
+/** Lets 【n】 marks and source chips share the hovered/focused citation index. */
+export function CiteActiveProvider({ children }: { children: ReactNode }) {
+  const [activeN, setActiveNState] = useState<number | null>(null);
+  const ownerRef = useRef<number | null>(null);
+  const setActiveN = useCallback((n: number | null) => {
+    if (n == null) {
+      // Only clear if this provider still thinks the same owner; callers
+      // that own a mark pass n on open and null on close — clear always is fine
+      // when switching marks because the new open runs after the old cleanup.
+      ownerRef.current = null;
+      setActiveNState(null);
+      return;
+    }
+    ownerRef.current = n;
+    setActiveNState(n);
+  }, []);
+  const value = useMemo(() => ({ activeN, setActiveN }), [activeN, setActiveN]);
+  return <CiteActiveContext.Provider value={value}>{children}</CiteActiveContext.Provider>;
+}
+
+export function useCiteActive(): CiteActiveApi {
+  const ctx = useContext(CiteActiveContext);
+  return ctx ?? { activeN: null, setActiveN: () => undefined };
+}
+
 /** Split plain text into nodes, turning 【n】 into interactive marks. */
 export function splitCiteMarks(
   text: string,
@@ -44,13 +79,18 @@ export function splitCiteMarks(
     if (m.index > last) out.push(text.slice(last, m.index));
     const n = Number(m[1]);
     const cite = n >= 1 && n <= citations.length ? citations[n - 1] : undefined;
-    out.push(
-      <CitationMark
-        key={`${keyPrefix}-c${i++}-${n}`}
-        n={n}
-        citation={cite}
-      />,
-    );
+    if (!cite) {
+      // No matching cite — keep plain text, avoid broken interactive UI.
+      out.push(m[0]);
+    } else {
+      out.push(
+        <CitationMark
+          key={`${keyPrefix}-c${i++}-${n}`}
+          n={n}
+          citation={cite}
+        />,
+      );
+    }
     last = m.index + m[0].length;
   }
   if (last < text.length) out.push(text.slice(last));
@@ -69,24 +109,28 @@ export function highlightSpan(quote: string): { before: string; hit: string; aft
   const q = (quote || "").trim();
   if (!q) return { before: "", hit: "", after: "" };
   if (q.length <= 48) return { before: "", hit: q, after: "" };
-  // Prefer first sentence / clause up to ~72 chars
   const cut = q.search(/[。！？；;\n]/);
   if (cut > 12 && cut <= 72) {
     return { before: "", hit: q.slice(0, cut + 1), after: q.slice(cut + 1) };
   }
   const end = Math.min(72, q.length);
-  // Avoid cutting mid-word for Latin; for CJK just slice
   return { before: "", hit: q.slice(0, end), after: q.slice(end) };
 }
 
-function CitationMark({ n, citation }: { n: number; citation?: CiteRef }) {
+function CitationMark({ n, citation }: { n: number; citation: CiteRef }) {
   const btnId = useId();
   const popId = `${btnId}-pop`;
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const [coords, setCoords] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    above: boolean;
+  } | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { setActiveN } = useCiteActive();
 
   const clearClose = () => {
     if (closeTimer.current) {
@@ -110,14 +154,23 @@ function CitationMark({ n, citation }: { n: number; citation?: CiteRef }) {
     left = Math.max(pad, Math.min(left, window.innerWidth - popW - pad));
     const below = r.bottom + 8;
     const spaceBelow = window.innerHeight - below;
-    const top = spaceBelow < 140 && r.top > 160 ? r.top - 8 : below;
-    setCoords({ top, left });
+    const above = spaceBelow < 160 && r.top > 180;
+    const top = above ? r.top - 8 : below;
+    setCoords({ top, left, width: popW, above });
   }, []);
 
   useLayoutEffect(() => {
     if (!open) return;
     place();
   }, [open, place]);
+
+  useEffect(() => {
+    if (open) {
+      setActiveN(n);
+      return () => setActiveN(null);
+    }
+    return undefined;
+  }, [open, n, setActiveN]);
 
   useEffect(() => {
     if (!open) return;
@@ -150,14 +203,8 @@ function CitationMark({ n, citation }: { n: number; citation?: CiteRef }) {
 
   useEffect(() => () => clearClose(), []);
 
-  const label = citation
-    ? `来源 ${n}：${citation.title || "未命名"}`
-    : `来源 ${n}`;
-
-  const hl = citation ? highlightSpan(citation.quote) : null;
-  const popAbove = coords && btnRef.current
-    ? coords.top < btnRef.current.getBoundingClientRect().top
-    : false;
+  const label = `来源 ${n}：${citation.title || "未命名"}`;
+  const hl = highlightSpan(citation.quote || "");
 
   return (
     <span className="cite-mark-wrap">
@@ -165,7 +212,7 @@ function CitationMark({ n, citation }: { n: number; citation?: CiteRef }) {
         ref={btnRef}
         type="button"
         id={btnId}
-        className="cite-mark"
+        className={`cite-mark${open ? " cite-mark-open" : ""}`}
         aria-label={label}
         aria-describedby={open ? popId : undefined}
         aria-expanded={open}
@@ -175,11 +222,6 @@ function CitationMark({ n, citation }: { n: number; citation?: CiteRef }) {
           setOpen(true);
         }}
         onMouseLeave={scheduleClose}
-        onPointerEnter={() => {
-          clearClose();
-          setOpen(true);
-        }}
-        onPointerLeave={scheduleClose}
         onFocus={() => {
           clearClose();
           setOpen(true);
@@ -191,10 +233,10 @@ function CitationMark({ n, citation }: { n: number; citation?: CiteRef }) {
         onClick={(e) => {
           e.preventDefault();
           clearClose();
-          setOpen(true);
+          setOpen((v) => !v);
         }}
       >
-        <sup>{n}</sup>
+        {n}
       </button>
       {open && coords && typeof document !== "undefined"
         ? createPortal(
@@ -203,12 +245,12 @@ function CitationMark({ n, citation }: { n: number; citation?: CiteRef }) {
               id={popId}
               role="dialog"
               aria-label={label}
-              className={`cite-pop${popAbove ? " cite-pop-above" : ""}`}
+              className={`cite-pop${coords.above ? " cite-pop-above" : ""}`}
               style={{
-                top: popAbove ? undefined : coords.top,
-                bottom: popAbove ? window.innerHeight - coords.top : undefined,
+                top: coords.above ? undefined : coords.top,
+                bottom: coords.above ? window.innerHeight - coords.top : undefined,
                 left: coords.left,
-                width: Math.min(320, window.innerWidth - 16),
+                width: coords.width,
               }}
               onMouseEnter={clearClose}
               onMouseLeave={scheduleClose}
@@ -218,10 +260,10 @@ function CitationMark({ n, citation }: { n: number; citation?: CiteRef }) {
                   {n}
                 </span>
                 <strong className="cite-pop-title">
-                  {citation?.title || `来源 ${n}`}
+                  {citation.title || `来源 ${n}`}
                 </strong>
               </div>
-              {hl && (hl.hit || hl.before || hl.after) ? (
+              {hl.hit || hl.before || hl.after ? (
                 <p className="cite-pop-quote">
                   {hl.before}
                   <mark className="cite-hl">{hl.hit}</mark>
@@ -230,11 +272,9 @@ function CitationMark({ n, citation }: { n: number; citation?: CiteRef }) {
               ) : (
                 <p className="cite-pop-quote muted">暂无摘录</p>
               )}
-              {citation ? (
-                <Link href={citeHref(citation)} className="cite-pop-link" tabIndex={0}>
-                  打开原文
-                </Link>
-              ) : null}
+              <Link href={citeHref(citation)} className="cite-pop-link" tabIndex={0}>
+                打开原文
+              </Link>
             </div>,
             document.body,
           )

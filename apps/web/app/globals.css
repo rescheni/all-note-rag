@@ -552,11 +552,11 @@ button:hover, .btn:hover {
   color: var(--on-accent);
   box-shadow: 0 6px 16px rgba(94, 138, 104, 0.22);
 }
-button:hover:not(.secondary):not(.linkish):not(.tree-row):not(.tree-twist-btn):not(.nav-exit):not(.source-section-head):not(.conn-fold):not(.source-book),
+button:hover:not(.secondary):not(.linkish):not(.tree-row):not(.tree-twist-btn):not(.nav-exit):not(.source-section-head):not(.conn-fold):not(.source-book):not(.ask-thread-del):not(.cite-mark):not(.ask-confirm-danger):not(.ask-cites-toggle):not(.ask-new-btn),
 .btn:hover:not(.secondary) {
   transform: translateY(-1px);
 }
-button:active:not(.secondary):not(.linkish):not(.tree-row):not(.tree-twist-btn):not(.nav-exit):not(.source-section-head):not(.conn-fold):not(.source-book),
+button:active:not(.secondary):not(.linkish):not(.tree-row):not(.tree-twist-btn):not(.nav-exit):not(.source-section-head):not(.conn-fold):not(.source-book):not(.ask-thread-del):not(.cite-mark):not(.ask-confirm-danger):not(.ask-cites-toggle):not(.ask-new-btn),
 .btn:active:not(.secondary) {
   transform: scale(0.97);
   background: #466e50;
@@ -1123,6 +1123,39 @@ blockquote.ask-quote {
   background: color-mix(in srgb, var(--moss-wash) 70%, var(--paper));
   box-shadow: var(--shadow);
 }
+.cite-chip-quote {
+  margin: -0.35rem 0 0.65rem;
+  padding: 0.55rem 0.7rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--paper) 82%, var(--moss-wash));
+  animation: cite-pop-in 160ms var(--ease) both;
+}
+.cite-chip-quote-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+.cite-chip-quote-head strong {
+  font-size: 0.8125rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cite-chip-quote-body {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--ink) 72%, var(--muted));
+  max-height: 5.5rem;
+  overflow: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cite-chip-quote { animation: none; }
+}
 .cite-card-active {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   box-shadow: var(--shadow-lift);
@@ -1157,43 +1190,58 @@ blockquote.ask-quote {
 .ask-cites + .ask-answer-paper { margin-top: 0.85rem; }
 .cite-stack-wrap { margin: 0; }
 
-/* Citation corner marks in answer markdown */
+/* Citation corner marks in answer markdown — inline, no line skew */
 .cite-mark-wrap {
-  display: inline;
-  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  vertical-align: baseline;
   white-space: nowrap;
+  margin: 0 0.05em;
+  /* Keep superscript from inflating line-box */
+  line-height: 0;
 }
 .cite-mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin: 0 0.05em;
-  padding: 0 0.18em;
+  position: relative;
+  top: -0.45em;
+  min-width: 1.05em;
+  height: 1.05em;
+  margin: 0;
+  padding: 0 0.28em;
   border: 0;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--moss-wash) 80%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--moss-wash) 85%, transparent);
   color: var(--accent-hover);
   cursor: pointer;
-  font: inherit;
-  line-height: 1;
-  vertical-align: super;
-  transition: background 140ms var(--ease), color 140ms var(--ease);
-}
-.cite-mark sup {
-  font-size: 0.7em;
+  font-family: inherit;
+  font-size: 0.68em;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  top: 0;
+  vertical-align: baseline;
+  box-shadow: none;
+  transform: none;
+  transition: background 140ms var(--ease), color 140ms var(--ease), box-shadow 140ms var(--ease);
 }
 .cite-mark:hover,
-.cite-mark:focus-visible {
-  background: color-mix(in srgb, var(--accent) 22%, var(--paper));
+.cite-mark:focus-visible,
+.cite-mark-open {
+  background: color-mix(in srgb, var(--accent) 24%, var(--paper));
   color: var(--accent-hover);
   outline: none;
+  transform: none;
 }
 .cite-mark:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 55%, transparent);
+}
+.cite-mark:hover,
+.cite-mark:active {
+  /* defeat global button hover green wash */
+  background: color-mix(in srgb, var(--accent) 24%, var(--paper));
+  color: var(--accent-hover);
+  box-shadow: none;
 }
 .cite-pop {
   position: fixed;
@@ -1322,21 +1370,23 @@ blockquote.ask-quote {
   gap: 0.2rem;
 }
 .ask-thread-list li {
-  position: relative;
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  gap: 0.15rem;
   border-radius: 10px;
+  min-height: 2.4rem;
 }
 .ask-thread-list li.active {
   background: color-mix(in srgb, var(--moss-wash) 75%, var(--paper));
 }
 .ask-thread-item {
   flex: 1;
+  min-width: 0;
   appearance: none;
   border: 0;
   background: transparent;
   text-align: left;
-  padding: 0.55rem 1.9rem 0.55rem 0.65rem;
+  padding: 0.5rem 0.4rem 0.5rem 0.65rem;
   cursor: pointer;
   color: var(--ink);
   border-radius: 10px;
@@ -1355,41 +1405,117 @@ blockquote.ask-quote {
   font-weight: 500;
 }
 .ask-thread-del {
-  position: absolute;
-  right: 0.3rem;
-  top: 50%;
-  transform: translateY(-50%);
+  position: static;
+  flex-shrink: 0;
+  align-self: center;
   appearance: none;
   border: 1px solid transparent;
-  background: color-mix(in srgb, var(--paper) 80%, transparent);
+  background: transparent;
   color: var(--muted);
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 1.6rem;
+  height: 1.6rem;
+  margin-right: 0.25rem;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   opacity: 0;
+  transform: none;
+  box-shadow: none;
   transition:
     opacity 140ms var(--ease),
     background 140ms var(--ease),
     color 140ms var(--ease),
     border-color 140ms var(--ease);
 }
+.ask-thread-del .icon {
+  width: 0.85rem;
+  height: 0.85rem;
+}
 .ask-thread-list li:hover .ask-thread-del,
 .ask-thread-list li.active .ask-thread-del,
+.ask-thread-list li:focus-within .ask-thread-del,
 .ask-thread-del:focus-visible {
   opacity: 1;
 }
-.ask-thread-del:hover {
+.ask-thread-del:hover,
+.ask-thread-del:active {
   background: color-mix(in srgb, var(--danger) 14%, var(--paper));
   border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
   color: var(--danger);
+  transform: none;
+  box-shadow: none;
 }
 .ask-thread-del:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+/* In-app delete confirm (matcha paper, not native confirm) */
+.ask-confirm-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: var(--scrim, rgba(60, 51, 44, 0.28));
+  backdrop-filter: blur(2px);
+}
+.ask-confirm-dialog {
+  width: min(22rem, 100%);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lift, 0 22px 48px rgba(60, 51, 44, 0.22));
+  padding: 1.05rem 1.15rem 1.1rem;
+}
+.ask-confirm-kicker {
+  margin: 0 0 0.2rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.ask-confirm-dialog h2 {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink);
+}
+.ask-confirm-body {
+  margin: 0 0 0.15rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+.ask-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.95rem;
+}
+button.ask-confirm-danger {
+  background: var(--danger);
+  color: #fffaf2;
+  border-color: transparent;
+}
+button.ask-confirm-danger:hover:not(:disabled),
+button.ask-confirm-danger:active:not(:disabled) {
+  background: #a74a4a;
+  color: #fffaf2;
+  transform: none;
+  box-shadow: 0 6px 16px rgba(196, 92, 92, 0.22);
+}
+button.ask-confirm-danger:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ask-confirm-scrim { backdrop-filter: none; }
 }
 
 .ask-main {

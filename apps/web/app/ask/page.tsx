@@ -4,6 +4,7 @@ import Link from "next/link";
 import { api, getToken } from "@/lib/api";
 import { loadSpaces, spaceKindLabel, type Space } from "@/lib/space";
 import { SafeMarkdown } from "@/lib/safe-markdown";
+import { CiteActiveProvider, useCiteActive } from "@/lib/cite-marks";
 import { PathCrumbs, decodeSegment } from "../notes/crumbs";
 import { IconAsk, IconClose } from "../icons";
 import {
@@ -158,12 +159,15 @@ function useSourcesOpenPref(): [boolean, (v: boolean) => void] {
 
 function CitationsBlock({
   citations,
+  allCitations,
   reduced,
   scanning,
   activeIndex,
   forceOpen,
 }: {
   citations: DisplayCitation[];
+  /** Full 【n】 index list (unfiltered) for hover quote sync */
+  allCitations?: Citation[];
   reduced: boolean | null;
   /** Step-through retrieve animation */
   scanning?: boolean;
@@ -175,6 +179,8 @@ function CitationsBlock({
   const wasScanning = useRef(false);
   const open = forceOpen || scanning ? true : prefOpen;
   const panelId = useId();
+  const { activeN } = useCiteActive();
+  const cardRefs = useRef<Map<number, HTMLElement>>(new Map());
 
   useEffect(() => {
     if (wasScanning.current && !scanning) {
@@ -184,6 +190,14 @@ function CitationsBlock({
     wasScanning.current = Boolean(scanning);
   }, [scanning, setPrefOpen]);
 
+  useEffect(() => {
+    if (activeN == null || scanning) return;
+    const el = cardRefs.current.get(activeN);
+    if (el && open) {
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [activeN, scanning, open]);
+
   if (!citations.length) {
     return <p className="hub-inline-empty muted">这次没有可点的来源卡片。</p>;
   }
@@ -192,12 +206,23 @@ function CitationsBlock({
     ? citations.slice(0, Math.max(0, (activeIndex ?? 0) + 1))
     : citations;
 
+  const hoverCite = (() => {
+    if (scanning || activeN == null || activeN < 1) return null;
+    const fromDisplay = citations.find((c) => c.n === activeN);
+    if (fromDisplay) return fromDisplay;
+    const raw = allCitations?.[activeN - 1];
+    if (!raw) return null;
+    return { ...raw, n: activeN };
+  })();
+
   return (
     <div className={`ask-cites${scanning ? " ask-cites-scanning" : ""}`}>
       <div className="cite-chip-row" aria-label="来源速览">
         <AnimatePresence initial={false}>
           {visible.map((c, i) => {
-            const active = scanning && i === activeIndex;
+            const active =
+              (scanning && i === activeIndex) ||
+              (!scanning && activeN === c.n);
             return (
               <motion.div
                 key={`chip-${c.n}-${c.note_id}-${c.source_block_id || c.block_id}`}
@@ -223,6 +248,22 @@ function CitationsBlock({
           })}
         </AnimatePresence>
       </div>
+
+      {hoverCite ? (
+        <div className="cite-chip-quote" role="status">
+          <div className="cite-chip-quote-head">
+            <span className="cite-chip-n" aria-hidden="true">
+              {hoverCite.n}
+            </span>
+            <strong>{decodeSegment(hoverCite.title) || "未命名"}</strong>
+          </div>
+          {hoverCite.quote ? (
+            <p className="cite-chip-quote-body">{hoverCite.quote}</p>
+          ) : (
+            <p className="cite-chip-quote-body muted">暂无摘录</p>
+          )}
+        </div>
+      ) : null}
 
       <div className="ask-cites-toggle-row">
         <button
@@ -262,11 +303,17 @@ function CitationsBlock({
               <AnimatePresence initial={false}>
                 {visible.map((c, i) => {
                   const shelf = shelfHref(c);
-                  const active = scanning && i === activeIndex;
+                  const active =
+                    (scanning && i === activeIndex) ||
+                    (!scanning && activeN === c.n);
                   return (
                     <motion.article
                       key={`card-${c.n}-${c.note_id}-${c.source_block_id || c.block_id}`}
                       layout
+                      ref={(node) => {
+                        if (node) cardRefs.current.set(c.n, node);
+                        else cardRefs.current.delete(c.n);
+                      }}
                       className={`cite-card${active ? " cite-card-active" : ""}`}
                       initial={
                         scanning && !reduced
@@ -334,7 +381,7 @@ function AssistantBody({
   const displayCites =
     displayCitations ?? selectDisplayCitations(citations, content);
   return (
-    <>
+    <CiteActiveProvider>
       {aiFailed && !scanning ? (
         <p className="ask-ai-failed" role="status">
           {`AI 未能生成（${aiError || "未知原因"}）. 以下为检索摘录。`}
@@ -352,6 +399,7 @@ function AssistantBody({
       {displayCites.length ? (
         <CitationsBlock
           citations={displayCites}
+          allCitations={citations}
           reduced={reduced}
           scanning={scanning}
           activeIndex={activeIndex}
@@ -371,7 +419,7 @@ function AssistantBody({
           <SafeMarkdown source={content} citations={citations} />
         </motion.article>
       ) : null}
-    </>
+    </CiteActiveProvider>
   );
 }
 
@@ -391,6 +439,9 @@ export default function AskPage() {
   const [loadingThreads, setLoadingThreads] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [reveal, setReveal] = useState<RevealState | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const revealTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const clearRevealTimers = useCallback(() => {
@@ -490,12 +541,16 @@ export default function AskPage() {
     await loadMessages(space.id, tid);
   }
 
-  async function deleteThread(tid: string) {
-    if (!space) return;
+  function requestDeleteThread(tid: string) {
     const title = threads.find((t) => t.id === tid)?.title?.trim() || "此对话";
-    if (typeof window !== "undefined" && !window.confirm(`删除「${title}」？删除后不可恢复。`)) {
-      return;
-    }
+    setDeleteTarget({ id: tid, title });
+  }
+
+  async function confirmDeleteThread() {
+    if (!space || !deleteTarget) return;
+    const tid = deleteTarget.id;
+    setDeleting(true);
+    setErr("");
     try {
       await api(`/v1/spaces/${space.id}/ask/threads/${tid}`, { method: "DELETE" });
       setThreads((prev) => prev.filter((t) => t.id !== tid));
@@ -505,10 +560,23 @@ export default function AskPage() {
         setThreadId(null);
         setMessages([]);
       }
+      setDeleteTarget(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "删除失败");
+    } finally {
+      setDeleting(false);
     }
   }
+
+  useEffect(() => {
+    if (!deleteTarget) return;
+    deleteCancelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !deleting) setDeleteTarget(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [deleteTarget, deleting]);
 
   function runRetrieveThenAnswer(
     payload: Omit<RevealState, "phase" | "activeIndex" | "displayCitations">,
@@ -683,7 +751,7 @@ export default function AskPage() {
                     aria-label="删除对话"
                     onClick={(ev) => {
                       ev.stopPropagation();
-                      void deleteThread(t.id);
+                      requestDeleteThread(t.id);
                     }}
                   >
                     <IconClose />
@@ -828,6 +896,46 @@ export default function AskPage() {
           </form>
         </section>
       </div>
+
+      {deleteTarget ? (
+        <div
+          className="ask-confirm-scrim"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !deleting) setDeleteTarget(null);
+          }}
+        >
+          <div
+            className="ask-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ask-del-title"
+          >
+            <p className="ask-confirm-kicker">删除对话</p>
+            <h2 id="ask-del-title">删除「{deleteTarget.title}」？</h2>
+            <p className="ask-confirm-body muted">删除后不可恢复。此操作只移除中枢里的问答记录，不会改动任何来源笔记。</p>
+            <div className="ask-confirm-actions">
+              <button
+                type="button"
+                className="secondary"
+                ref={deleteCancelRef}
+                disabled={deleting}
+                onClick={() => setDeleteTarget(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="ask-confirm-danger"
+                disabled={deleting}
+                onClick={() => void confirmDeleteThread()}
+              >
+                {deleting ? "删除中…" : "删除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
