@@ -12,6 +12,7 @@ import {
   easeOutExpo,
   motion,
   springSoft,
+  springSnap,
   useReducedMotion,
 } from "../ui-motion";
 
@@ -58,7 +59,10 @@ type ChatMessage = {
 /** In-flight reveal after ask returns: index sources, then show answer. */
 type RevealState = {
   id: string;
+  /** Full citation list for 【n】 marks in the answer. */
   citations: Citation[];
+  /** Filtered/numbered cards for the retrieve animation. */
+  displayCitations: DisplayCitation[];
   answer: string;
   mode?: string | null;
   ai_failed?: boolean;
@@ -69,7 +73,7 @@ type RevealState = {
 
 const ASK_TIMEOUT_MS = 180_000;
 const SOURCES_OPEN_KEY = "note-hub:ask-sources-open";
-const RETRIEVE_STEP_MS = 380;
+const RETRIEVE_STEP_MS = 580;
 
 function shelfHref(c: Citation): string | null {
   if (!c.connection_id || !c.path) return null;
@@ -92,21 +96,42 @@ function normalizeCitations(raw: unknown): Citation[] {
   return raw.filter((c): c is Citation => Boolean(c) && typeof c === "object");
 }
 
-const listVariants = {
-  hidden: {},
-  show: {
-    transition: { staggerChildren: 0.03, delayChildren: 0.05 },
-  },
-};
+/** Usable source card: real quote, not empty/garbled. */
+function isUsableCitation(c: Citation): boolean {
+  const quote = (c.quote || "").replace(/\s+/g, " ").trim();
+  if (quote.length < 8) return false;
+  const meaningful = quote
+    .replace(/&[a-zA-Z]+;/g, " ")
+    .replace(/[^\u3400-\u9fffA-Za-z0-9]/g, "");
+  if (meaningful.length < 4) return false;
+  return Boolean(c.note_id);
+}
 
-const itemVariants = {
-  hidden: { opacity: 0, y: 8 },
-  show: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.28, ease: easeOutExpo },
-  },
-};
+type DisplayCitation = Citation & { n: number };
+
+/**
+ * Prefer citations referenced by 【n】 in the answer when present;
+ * always skip empty/garbled quotes. `n` keeps the original 1-based index
+ * so hover marks stay aligned with the answer.
+ */
+function selectDisplayCitations(
+  citations: Citation[],
+  answer?: string | null,
+): DisplayCitation[] {
+  const indexed = citations
+    .map((c, i) => ({ ...c, n: i + 1 }))
+    .filter((c) => isUsableCitation(c));
+  if (!indexed.length) return [];
+  if (!answer) return indexed;
+  const refs = new Set<number>();
+  for (const m of answer.matchAll(/【(\d+)】/g)) {
+    const n = Number(m[1]);
+    if (n >= 1) refs.add(n);
+  }
+  if (!refs.size) return indexed;
+  const preferred = indexed.filter((c) => refs.has(c.n));
+  return preferred.length ? preferred : indexed;
+}
 
 function useSourcesOpenPref(): [boolean, (v: boolean) => void] {
   const [open, setOpen] = useState(false);
@@ -138,7 +163,7 @@ function CitationsBlock({
   activeIndex,
   forceOpen,
 }: {
-  citations: Citation[];
+  citations: DisplayCitation[];
   reduced: boolean | null;
   /** Step-through retrieve animation */
   scanning?: boolean;
@@ -170,31 +195,33 @@ function CitationsBlock({
   return (
     <div className={`ask-cites${scanning ? " ask-cites-scanning" : ""}`}>
       <div className="cite-chip-row" aria-label="来源速览">
-        {citations.map((c, i) => {
-          const shown = !scanning || i <= (activeIndex ?? -1);
-          const active = scanning && i === activeIndex;
-          if (!shown) return null;
-          return (
-            <motion.div
-              key={`chip-${c.note_id}-${c.source_block_id || c.block_id}-${i}`}
-              initial={scanning && !reduced ? { opacity: 0, y: 4, scale: 0.94 } : false}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              transition={springSoft}
-              whileHover={reduced ? undefined : { y: -1, scale: 1.02 }}
-              whileTap={reduced ? undefined : { scale: 0.97 }}
-            >
-              <Link
-                href={citeHref(c)}
-                className={`cite-chip${active ? " cite-chip-active" : ""}`}
+        <AnimatePresence initial={false}>
+          {visible.map((c, i) => {
+            const active = scanning && i === activeIndex;
+            return (
+              <motion.div
+                key={`chip-${c.n}-${c.note_id}-${c.source_block_id || c.block_id}`}
+                layout
+                initial={scanning && !reduced ? { opacity: 0, y: 6, scale: 0.9 } : false}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={reduced ? undefined : { opacity: 0, scale: 0.94 }}
+                transition={springSnap}
+                whileHover={reduced ? undefined : { y: -1, scale: 1.02 }}
+                whileTap={reduced ? undefined : { scale: 0.97 }}
               >
-                <span className="cite-chip-n" aria-hidden="true">
-                  {i + 1}
-                </span>
-                <span className="cite-chip-t">{decodeSegment(c.title) || "未命名"}</span>
-              </Link>
-            </motion.div>
-          );
-        })}
+                <Link
+                  href={citeHref(c)}
+                  className={`cite-chip${active ? " cite-chip-active" : ""}`}
+                >
+                  <span className="cite-chip-n" aria-hidden="true">
+                    {c.n}
+                  </span>
+                  <span className="cite-chip-t">{decodeSegment(c.title) || "未命名"}</span>
+                </Link>
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
       </div>
 
       <div className="ask-cites-toggle-row">
@@ -231,48 +258,50 @@ function CitationsBlock({
             transition={{ duration: 0.28, ease: easeOutExpo }}
             style={{ overflow: "hidden" }}
           >
-            <motion.div
-              className="cite-stack"
-              variants={reduced || scanning ? undefined : listVariants}
-              initial={reduced || scanning ? false : "hidden"}
-              animate="show"
-            >
-              {visible.map((c, i) => {
-                const shelf = shelfHref(c);
-                const active = scanning && i === activeIndex;
-                return (
-                  <motion.article
-                    key={c.note_id + (c.source_block_id || c.block_id) + i}
-                    className={`cite-card${active ? " cite-card-active" : ""}`}
-                    variants={reduced || scanning ? undefined : itemVariants}
-                    initial={
-                      scanning && !reduced ? { opacity: 0, y: 10, scale: 0.98 } : false
-                    }
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    transition={springSoft}
-                    whileHover={reduced || scanning ? undefined : { y: -2 }}
-                  >
-                    <Link href={citeHref(c)} className="cite-card-main">
-                      <div className="cite-card-head">
-                        <span className="cite-chip-n" aria-hidden="true">
-                          {i + 1}
-                        </span>
-                        <h3>{decodeSegment(c.title) || "未命名"}</h3>
-                      </div>
-                      {c.path ? <PathCrumbs path={c.path} title={c.title} /> : null}
-                      {c.quote ? <blockquote className="ask-quote">{c.quote}</blockquote> : null}
-                    </Link>
-                    {shelf ? (
-                      <div className="cite-card-foot">
-                        <Link href={shelf} className="hit-shelf">
-                          在书架中打开
-                        </Link>
-                      </div>
-                    ) : null}
-                  </motion.article>
-                );
-              })}
-            </motion.div>
+            <div className="cite-stack">
+              <AnimatePresence initial={false}>
+                {visible.map((c, i) => {
+                  const shelf = shelfHref(c);
+                  const active = scanning && i === activeIndex;
+                  return (
+                    <motion.article
+                      key={`card-${c.n}-${c.note_id}-${c.source_block_id || c.block_id}`}
+                      layout
+                      className={`cite-card${active ? " cite-card-active" : ""}`}
+                      initial={
+                        scanning && !reduced
+                          ? { opacity: 0, y: 16, scale: 0.96 }
+                          : reduced
+                            ? false
+                            : { opacity: 0, y: 8 }
+                      }
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={reduced ? undefined : { opacity: 0, y: -6, scale: 0.98 }}
+                      transition={scanning ? springSnap : springSoft}
+                      whileHover={reduced || scanning ? undefined : { y: -2 }}
+                    >
+                      <Link href={citeHref(c)} className="cite-card-main">
+                        <div className="cite-card-head">
+                          <span className="cite-chip-n" aria-hidden="true">
+                            {c.n}
+                          </span>
+                          <h3>{decodeSegment(c.title) || "未命名"}</h3>
+                        </div>
+                        {c.path ? <PathCrumbs path={c.path} title={c.title} /> : null}
+                        {c.quote ? <blockquote className="ask-quote">{c.quote}</blockquote> : null}
+                      </Link>
+                      {shelf ? (
+                        <div className="cite-card-foot">
+                          <Link href={shelf} className="hit-shelf">
+                            在书架中打开
+                          </Link>
+                        </div>
+                      ) : null}
+                    </motion.article>
+                  );
+                })}
+              </AnimatePresence>
+            </div>
           </motion.div>
         ) : null}
       </AnimatePresence>
@@ -283,6 +312,7 @@ function CitationsBlock({
 function AssistantBody({
   content,
   citations,
+  displayCitations,
   mode,
   aiFailed,
   aiError,
@@ -292,6 +322,8 @@ function AssistantBody({
 }: {
   content: string | null;
   citations: Citation[];
+  /** Precomputed scan/display cards; falls back to selectDisplayCitations. */
+  displayCitations?: DisplayCitation[];
   mode?: string | null;
   aiFailed?: boolean;
   aiError?: string | null;
@@ -299,6 +331,8 @@ function AssistantBody({
   scanning?: boolean;
   activeIndex?: number;
 }) {
+  const displayCites =
+    displayCitations ?? selectDisplayCitations(citations, content);
   return (
     <>
       {aiFailed && !scanning ? (
@@ -315,14 +349,16 @@ function AssistantBody({
         </p>
       ) : null}
 
-      {citations.length ? (
+      {displayCites.length ? (
         <CitationsBlock
-          citations={citations}
+          citations={displayCites}
           reduced={reduced}
           scanning={scanning}
           activeIndex={activeIndex}
           forceOpen={scanning}
         />
+      ) : !scanning && content != null ? (
+        <p className="hub-inline-empty muted">笔记里没有直接依据可点的来源。</p>
       ) : null}
 
       {content != null && !scanning ? (
@@ -456,6 +492,10 @@ export default function AskPage() {
 
   async function deleteThread(tid: string) {
     if (!space) return;
+    const title = threads.find((t) => t.id === tid)?.title?.trim() || "此对话";
+    if (typeof window !== "undefined" && !window.confirm(`删除「${title}」？删除后不可恢复。`)) {
+      return;
+    }
     try {
       await api(`/v1/spaces/${space.id}/ask/threads/${tid}`, { method: "DELETE" });
       setThreads((prev) => prev.filter((t) => t.id !== tid));
@@ -471,23 +511,27 @@ export default function AskPage() {
   }
 
   function runRetrieveThenAnswer(
-    payload: Omit<RevealState, "phase" | "activeIndex">,
+    payload: Omit<RevealState, "phase" | "activeIndex" | "displayCitations">,
     after: () => Promise<void>,
   ) {
     clearRevealTimers();
-    const cites = payload.citations;
-    if (!cites.length || reduced) {
-      setReveal({ ...payload, phase: "answer", activeIndex: -1 });
+    const display = selectDisplayCitations(payload.citations, payload.answer);
+    const revealPayload: Omit<RevealState, "phase" | "activeIndex"> = {
+      ...payload,
+      displayCitations: display,
+    };
+    if (!display.length || reduced) {
+      setReveal({ ...revealPayload, phase: "answer", activeIndex: -1 });
       setBusy(false);
       void after().finally(() => setReveal(null));
       return;
     }
 
-    setReveal({ ...payload, phase: "retrieve", activeIndex: 0 });
+    setReveal({ ...revealPayload, phase: "retrieve", activeIndex: 0 });
     setBusy(false);
 
     const step = RETRIEVE_STEP_MS;
-    for (let i = 1; i < cites.length; i++) {
+    for (let i = 1; i < display.length; i++) {
       const t = setTimeout(() => {
         setReveal((prev) =>
           prev && prev.id === payload.id ? { ...prev, activeIndex: i } : prev,
@@ -499,7 +543,7 @@ export default function AskPage() {
     const done = setTimeout(() => {
       setReveal((prev) =>
         prev && prev.id === payload.id
-          ? { ...prev, phase: "answer", activeIndex: cites.length - 1 }
+          ? { ...prev, phase: "answer", activeIndex: display.length - 1 }
           : prev,
       );
       try {
@@ -510,9 +554,9 @@ export default function AskPage() {
       void after().finally(() => {
         setTimeout(() => {
           setReveal((prev) => (prev && prev.id === payload.id ? null : prev));
-        }, 120);
+        }, 160);
       });
-    }, step * cites.length + 420);
+    }, step * display.length + 520);
     revealTimers.current.push(done);
   }
 
@@ -729,6 +773,7 @@ export default function AskPage() {
                 <AssistantBody
                   content={reveal.phase === "answer" ? reveal.answer : null}
                   citations={reveal.citations}
+                  displayCitations={reveal.displayCitations}
                   mode={reveal.mode}
                   aiFailed={reveal.ai_failed}
                   aiError={reveal.ai_error}

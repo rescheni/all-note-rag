@@ -177,6 +177,17 @@ describe("composeAskAnswer", () => {
 });
 
 describe("loadChunksViaSql", () => {
+  it("uses content-phrase ILIKE for template questions", async () => {
+    let params: unknown[] = [];
+    const run = async (_text: string, p?: unknown[]) => {
+      params = p ?? [];
+      return { rows: [] };
+    };
+    await loadChunksViaSql(run)(SPACE, "什么是感情", { limit: 10 });
+    expect(params[1]).toBe("%感情%");
+    expect(params[2]).toBe("感情");
+  });
+
   it("filters by space and passes FTS params", async () => {
     let sql = "";
     let params: unknown[] = [];
@@ -517,5 +528,67 @@ describe("Chinese question template retrieval", () => {
     const out = searchSourcesAndSimilar(SPACE, "什么是感情", notes);
     expect(out.results[0]?.note_id).toBe("n-emotion");
     expect(out.results.map((r) => r.note_id)).not.toContain("n-lvalue");
+  });
+
+  it("drops vector-only template/unrelated notes when content tokens present", async () => {
+    const q = "什么是感情";
+    const qEmb = localProject(q);
+    const techOnly: RetrieveChunk[] = [
+      {
+        space_id: SPACE,
+        note_id: "n-lvalue",
+        title: "什么是左值",
+        text: "C++ 中左值是可取地址的表达式。",
+        source_block_id: "lv-para",
+        embedding: localProject("什么是左值 C++ 表达式"),
+      },
+      {
+        space_id: SPACE,
+        note_id: "n-kitex",
+        title: "「Hertz｜Kitex 高性能的秘密#1」",
+        text: "Kitex 是字节跳动的 Go RPC 框架，和 protobuf 搭配使用。",
+        source_block_id: "kx-para",
+        // Pure semantic: no 什么是 template tokens in title/body tokenization path needed —
+        // embedding ranks it for the query but content token 感情 is absent.
+        embedding: qEmb,
+      },
+      {
+        space_id: SPACE,
+        note_id: "n-gorm",
+        title: "go web rpc grom",
+        text: "Gorm 是 Go 的 ORM，和 Kitex 无关的技术笔记。",
+        source_block_id: "gm-para",
+        embedding: localProject("gorm kitex protobuf stack"),
+      },
+    ];
+    const r = await hybridRetrieve(SPACE, q, { chunks: techOnly, queryEmbedding: qEmb });
+    expect(r.unknown).toBe(true);
+    expect(r.hits).toEqual([]);
+  });
+
+  it("keeps vector hit only when it shares content tokens", async () => {
+    const q = "什么是感情";
+    const qEmb = localProject(q);
+    const mixed: RetrieveChunk[] = [
+      {
+        space_id: SPACE,
+        note_id: "n-kitex",
+        title: "Kitex",
+        text: "RPC 框架说明，与本题无关。",
+        source_block_id: "kx-para",
+        embedding: qEmb,
+      },
+      {
+        space_id: SPACE,
+        note_id: "n-emotion",
+        title: "日记",
+        text: "今天想到感情是信任与共鸣。",
+        source_block_id: "emo-para",
+        embedding: localProject("无关向量"),
+      },
+    ];
+    const r = await hybridRetrieve(SPACE, q, { chunks: mixed, queryEmbedding: qEmb });
+    expect(r.unknown).toBe(false);
+    expect(r.hits.map((h) => h.note_id)).toEqual(["n-emotion"]);
   });
 });

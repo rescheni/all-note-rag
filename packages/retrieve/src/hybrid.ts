@@ -260,34 +260,29 @@ export async function hybridRetrieve(
   }
 
   const contentTokens = queryContentTokens(q);
-  // Drop / demote vector hits that only share question templates (什么/么是), not content.
+  // When the query has content tokens (感情), drop vector hits with zero
+  // content-token overlap — including "pure semantic" demotions. Template-only
+  // filter is not enough: embeddings still rank「什么是左值」/Kitex for「什么是感情」.
   let usableVec = vecHits;
   if (contentTokens.length > 0 && vecHits.length) {
-    const kept: RetrieveHit[] = [];
-    const demoted: RetrieveHit[] = [];
-    for (const h of vecHits) {
-      const chunk = { title: h.title, text: h.text };
-      if (contentTokenOverlap(q, chunk) > 0) {
-        kept.push(h);
-      } else if (isTemplateOnlyMatch(q, chunk)) {
-        // filter template-only noise when we have content terms
-        continue;
-      } else {
-        // pure semantic (no lexical overlap): keep but demote later
-        demoted.push(h);
-      }
-    }
-    usableVec = [...kept, ...demoted];
+    usableVec = vecHits.filter(
+      (h) => contentTokenOverlap(q, { title: h.title, text: h.text }) > 0,
+    );
   }
 
+  const requireOverlap = contentTokens.length > 0;
+  const ftsUsable = requireOverlap
+    ? ftsHits.filter((h) => contentTokenOverlap(q, { title: h.title, text: h.text }) > 0)
+    : ftsHits;
+
   if (!usableVec.length) {
-    const hits = ftsHits.slice(0, limit);
+    const hits = ftsUsable.slice(0, limit);
     if (hits.length === 0) return { unknown: true, hits: [] };
     return { unknown: false, hits };
   }
 
   // Prefer FTS lists that already match content; boost content-overlap keys in RRF order.
-  const ftsBoosted = [...ftsHits].sort((a, b) => {
+  const ftsBoosted = [...ftsUsable].sort((a, b) => {
     const ca = contentTokenOverlap(q, { title: a.title, text: a.text });
     const cb = contentTokenOverlap(q, { title: b.title, text: b.text });
     return cb - ca || b.rank - a.rank || a.title.localeCompare(b.title, "zh");
@@ -314,7 +309,8 @@ export async function hybridRetrieve(
     const overlap = contentTokens.length
       ? contentTokenOverlap(q, { title: h.title, text: h.text })
       : 0;
-    // Content overlap boosts fused rank; template-filtered vec already gone.
+    if (requireOverlap && overlap <= 0) continue;
+    // Content overlap boosts fused rank; zero-overlap vec already dropped.
     hits.push({ ...h, rank: row.score + overlap * 0.15 });
     if (hits.length >= limit) break;
   }
@@ -360,7 +356,10 @@ function mapSqlRows(rows: SqlRow[]): RetrieveChunk[] {
 
 export function loadChunksViaSql(run: SqlQuery): LoadChunks {
   return async (spaceId, queryText, opts) => {
-    const like = "%" + queryText.trim() + "%";
+    // Prefer content-phrase ILIKE (感情) over full template query (什么是感情)
+    // so we do not over-fetch / mis-rank on question-template substrings.
+    const contentPhrase = stripCjkQueryStops(queryText).trim() || queryText.trim();
+    const like = "%" + contentPhrase + "%";
     const tokens = toTsQueryTokens(queryText);
     const rawIds = opts?.noteIds ?? [];
     const noteIds = rawIds.filter((id) => UUID_RE.test(id));

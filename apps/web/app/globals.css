@@ -933,13 +933,13 @@ iframe.preview, .preview-frame {
   font-weight: 500;
 }
 .ask-answer-paper {
-  line-height: 1.7;
-  max-width: 72ch;
-  padding: 1.05rem 1.2rem;
-  margin: 0 0 1rem;
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  line-height: 1.75;
+  max-width: 68ch;
+  padding: 1.25rem 1.4rem 1.35rem;
+  margin: 0.35rem 0 1.1rem;
+  background: color-mix(in srgb, var(--paper) 92%, var(--moss-wash));
+  border: 1px solid color-mix(in srgb, var(--line) 88%, var(--accent));
+  border-radius: calc(var(--radius) + 2px);
   box-shadow: var(--shadow);
 }
 .ask-answer {
@@ -998,16 +998,17 @@ iframe.preview, .preview-frame {
 .cite-stack {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
-  margin: 0 0 1.5rem;
+  gap: 0.7rem;
+  margin: 0.15rem 0 1.25rem;
+  padding: 0.15rem 0.1rem 0.35rem;
 }
 .cite-card {
   background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: calc(var(--radius) + 2px);
   box-shadow: var(--shadow);
   overflow: hidden;
-  transition: border-color 180ms var(--ease), box-shadow 200ms var(--ease);
+  transition: border-color 180ms var(--ease), box-shadow 200ms var(--ease), background 180ms var(--ease);
 }
 .cite-card:hover {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
@@ -1015,7 +1016,7 @@ iframe.preview, .preview-frame {
 }
 .cite-card-main {
   display: block;
-  padding: 0.8rem 0.95rem 0.7rem;
+  padding: 0.95rem 1.1rem 0.85rem;
   color: inherit;
   text-decoration: none;
 }
@@ -1041,16 +1042,22 @@ iframe.preview, .preview-frame {
   padding: 0 0.95rem 0.65rem;
 }
 blockquote.ask-quote {
-  margin: 0.35rem 0 0;
-  padding: 0.35rem 0 0.15rem 0.75rem;
+  margin: 0.45rem 0 0;
+  padding: 0.45rem 0.15rem 0.2rem 0.85rem;
   border: 0;
   border-left: 2px solid color-mix(in srgb, var(--accent) 55%, var(--line));
-  color: var(--muted);
+  color: color-mix(in srgb, var(--ink) 55%, var(--muted));
   font-size: 0.875rem;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
-.ask-cites { margin: 0.15rem 0 0.35rem; }
+.ask-cites {
+  margin: 0.35rem 0 0.55rem;
+  padding: 0.55rem 0.65rem 0.45rem;
+  background: color-mix(in srgb, var(--paper) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: calc(var(--radius) + 2px);
+}
 .ask-cites-scanning .cite-chip-row { margin-bottom: 0.55rem; }
 .ask-cites-toggle-row {
   display: flex;
@@ -1125,8 +1132,8 @@ blockquote.ask-quote {
 .ask-cites-scanning .cite-card-active::after {
   content: "";
   position: absolute;
-  left: 0.6rem;
-  right: 0.6rem;
+  left: 0.7rem;
+  right: 0.7rem;
   top: 0;
   height: 2px;
   border-radius: 2px;
@@ -1136,18 +1143,18 @@ blockquote.ask-quote {
     color-mix(in srgb, var(--accent) 75%, transparent),
     transparent
   );
-  animation: ask-scan-beam 0.9s var(--ease) infinite;
+  animation: ask-scan-beam 1.15s var(--ease) infinite;
   pointer-events: none;
 }
 @keyframes ask-scan-beam {
-  0% { transform: translateY(0.35rem); opacity: 0; }
-  25% { opacity: 0.9; }
-  100% { transform: translateY(4.2rem); opacity: 0; }
+  0% { transform: translateY(0.4rem); opacity: 0; }
+  22% { opacity: 0.95; }
+  100% { transform: translateY(4.6rem); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .ask-cites-scanning .cite-card-active::after { animation: none; opacity: 0; }
 }
-.ask-cites + .ask-answer-paper { margin-top: 0.65rem; }
+.ask-cites + .ask-answer-paper { margin-top: 0.85rem; }
 .cite-stack-wrap { margin: 0; }
 
 /* Citation corner marks in answer markdown */
@@ -1349,22 +1356,26 @@ blockquote.ask-quote {
 }
 .ask-thread-del {
   position: absolute;
-  right: 0.25rem;
+  right: 0.3rem;
   top: 50%;
   transform: translateY(-50%);
   appearance: none;
-  border: 0;
-  background: transparent;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--paper) 80%, transparent);
   color: var(--muted);
-  width: 1.6rem;
-  height: 1.6rem;
+  width: 1.75rem;
+  height: 1.75rem;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 140ms var(--ease), background 140ms var(--ease), color 140ms var(--ease);
+  transition:
+    opacity 140ms var(--ease),
+    background 140ms var(--ease),
+    color 140ms var(--ease),
+    border-color 140ms var(--ease);
 }
 .ask-thread-list li:hover .ask-thread-del,
 .ask-thread-list li.active .ask-thread-del,
@@ -1372,8 +1383,13 @@ blockquote.ask-quote {
   opacity: 1;
 }
 .ask-thread-del:hover {
-  background: color-mix(in srgb, var(--danger) 12%, var(--paper));
+  background: color-mix(in srgb, var(--danger) 14%, var(--paper));
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
   color: var(--danger);
+}
+.ask-thread-del:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .ask-main {
