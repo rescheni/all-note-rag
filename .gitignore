@@ -3,10 +3,15 @@ dist
 .next
 .turbo
 .env
+.env.*
+!.env.example
 *.log
 coverage
 .DS_Store
 /data/
+data/
+DATA/
 .tmp/
 *.tsbuildinfo
 apps/web/package-lock.json
+cloud-agent-transcripts/

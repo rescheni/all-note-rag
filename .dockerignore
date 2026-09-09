@@ -19,9 +19,10 @@
 .env.*
 !.env.example
 
-# local data / agent junk
+# local / persistent data (compose bind-mounts ./DATA)
 /data/
 data/
+DATA/
 cloud-agent-transcripts
 **/.cache
 
@@ -35,3 +36,4 @@ cloud-agent-transcripts
 docs
 DESIGN.md
 PRODUCT.md
+LICENSE

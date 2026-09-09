@@ -14,8 +14,8 @@
 
 | 环境 | URL |
 |------|-----|
-| 公网 | `https://notes.rei0.cn/v1/mcp` |
 | 本机 API | `http://127.0.0.1:3001/v1/mcp` |
+| 自建 / 示例域名 | `https://<your-host>/v1/mcp`（文档里若出现公网主机名，仅作示例，不是依赖） |
 
 鉴权（必备）：
 
@@ -34,7 +34,7 @@ Content-Type: application/json
 {
   "mcpServers": {
     "note-hub": {
-      "url": "https://notes.rei0.cn/v1/mcp",
+      "url": "http://127.0.0.1:3001/v1/mcp",
       "headers": {
         "Authorization": "Bearer hub_你的令牌"
       }
@@ -63,7 +63,7 @@ Content-Type: application/json
 示例：列出工具
 
 ```bash
-curl -s https://notes.rei0.cn/v1/mcp \
+curl -s http://127.0.0.1:3001/v1/mcp \
   -H "Authorization: Bearer hub_…" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -72,7 +72,7 @@ curl -s https://notes.rei0.cn/v1/mcp \
 便捷调用（非 JSON-RPC 信封）：
 
 ```bash
-curl -s https://notes.rei0.cn/v1/mcp \
+curl -s http://127.0.0.1:3001/v1/mcp \
   -H "Authorization: Bearer hub_…" \
   -H "Content-Type: application/json" \
   -d '{"tool":"search_notes","arguments":{"query":"睡眠"}}'

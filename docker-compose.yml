@@ -1,5 +1,9 @@
 name: note-hub
 
+# All persistent data under ./DATA (bind mounts).
+# First run: cp .env.example .env && change HUB_SECRET && docker compose up --build
+# Infra ports (postgres/redis/minio) bind to 127.0.0.1 only.
+
 x-app-env: &app-env
   DATABASE_URL: postgres://notehub:notehub@postgres:5432/notehub
   REDIS_URL: redis://redis:6379
@@ -9,7 +13,7 @@ x-app-env: &app-env
   S3_ACCESS_KEY: minioadmin
   S3_SECRET_KEY: minioadmin
   S3_FORCE_PATH_STYLE: "true"
-  WEB_ORIGIN: http://localhost:3000
+  WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
   NEXT_PUBLIC_API_URL: http://api:3001
   API_PORT: "3001"
   VAULT_BUCKET: obsidian-src
@@ -20,6 +24,12 @@ x-app-env: &app-env
   FEISHU_APP_ID: ${FEISHU_APP_ID:-}
   FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
   FEISHU_REDIRECT_URI: ${FEISHU_REDIRECT_URI:-http://127.0.0.1:3000/v1/connections/oauth/feishu/callback}
+  HUB_SECRET: ${HUB_SECRET:?missing_HUB_SECRET_copy_dotenv_example}
+  OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  CHAT_MODEL: ${CHAT_MODEL:-gpt-4o-mini}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+  EMBED_PROVIDER: ${EMBED_PROVIDER:-api}
   EMBED_MODEL_DIR: /data/models
 
 services:
@@ -30,9 +40,9 @@ services:
       POSTGRES_PASSWORD: notehub
       POSTGRES_DB: notehub
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ./DATA/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U notehub"]
       interval: 5s
@@ -41,8 +51,11 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--dir", "/data"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - ./DATA/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -56,10 +69,10 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
-      - miniodata:/data
+      - ./DATA/minio:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
@@ -85,7 +98,8 @@ services:
       dockerfile: apps/api/Dockerfile
     command: ["pnpm", "--filter", "@note-hub/api", "migrate"]
     env_file:
-      - .env.example
+      - path: .env
+        required: false
     environment:
       <<: *app-env
     depends_on:
@@ -100,11 +114,12 @@ services:
       dockerfile: apps/api/Dockerfile
     init: true
     env_file:
-      - .env.example
+      - path: .env
+        required: false
     environment:
       <<: *app-env
     volumes:
-      - embed-models:/data/models
+      - ./DATA/models:/data/models
     ports:
       - "3001:3001"
     depends_on:
@@ -132,11 +147,12 @@ services:
       dockerfile: apps/worker/Dockerfile
     init: true
     env_file:
-      - .env.example
+      - path: .env
+        required: false
     environment:
       <<: *app-env
     volumes:
-      - embed-models:/data/models
+      - ./DATA/models:/data/models
     depends_on:
       postgres:
         condition: service_healthy
@@ -158,7 +174,8 @@ services:
         NEXT_PUBLIC_API_URL: http://api:3001
     init: true
     env_file:
-      - .env.example
+      - path: .env
+        required: false
     environment:
       <<: *app-env
       PORT: "3000"
@@ -169,7 +186,3 @@ services:
       api:
         condition: service_healthy
 
-volumes:
-  pgdata:
-  miniodata:
-  embed-models:

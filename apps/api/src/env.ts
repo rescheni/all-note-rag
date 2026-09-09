@@ -1,7 +1,19 @@
+const INSECURE_DEFAULT_HUB_SECRET = "dev-hub-secret-change-me";
+
 function req(name: string, fallback?: string): string {
   const v = process.env[name] ?? fallback;
   if (!v) throw new Error("missing env " + name);
   return v;
+}
+
+function warnInsecureHubSecret(secret: string): void {
+  if (secret !== INSECURE_DEFAULT_HUB_SECRET) return;
+  console.warn(
+    JSON.stringify({
+      level: "warn",
+      message: "HUB_SECRET is the insecure default; set a strong random value before any shared or internet-facing deploy",
+    }),
+  );
 }
 
 export const env = {
@@ -12,7 +24,7 @@ export const env = {
   s3Bucket: req("S3_BUCKET", "hub-dev"),
   s3AccessKey: req("S3_ACCESS_KEY", "minioadmin"),
   s3SecretKey: req("S3_SECRET_KEY", "minioadmin"),
-  hubSecret: req("HUB_SECRET", "dev-hub-secret-change-me"),
+  hubSecret: req("HUB_SECRET", INSECURE_DEFAULT_HUB_SECRET),
   apiPort: Number(req("API_PORT", "3001")),
   webOrigin: req("WEB_ORIGIN", "http://127.0.0.1:3000"),
   vaultBucket: req("VAULT_BUCKET", "obsidian-src"),
@@ -51,3 +63,5 @@ export const feishuOAuthEnv = {
     return Boolean(this.appId && this.appSecret);
   },
 };
+
+warnInsecureHubSecret(env.hubSecret);

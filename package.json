@@ -15,5 +15,6 @@
     "dev:web": "pnpm --filter @note-hub/web dev",
     "build": "pnpm -r --if-present build"
   },
-  "packageManager": "pnpm@9.15.9"
+  "packageManager": "pnpm@9.15.9",
+  "license": "AGPL-3.0-only"
 }
