@@ -13,9 +13,11 @@ import {
   EMBEDDING_DIM,
   searchSourcesAndSimilar,
   similarToEmbedding,
+  scoreChunk,
   type RetrieveChunk,
   type SearchCorpusNote,
 } from "../src/index.ts";
+import { queryContentTokens, toTsQueryTokens } from "@note-hub/core";
 
 const SPACE = "space-a";
 
@@ -435,5 +437,85 @@ describe("embedTexts settings endpoint", () => {
       if (prevK === undefined) delete process.env.OPENAI_API_KEY;
       else process.env.OPENAI_API_KEY = prevK;
     }
+  });
+});
+
+
+describe("Chinese question template retrieval", () => {
+  const zhCorpus: RetrieveChunk[] = [
+    {
+      space_id: SPACE,
+      note_id: "n-emotion",
+      title: "感情随笔",
+      text: "感情是人与人之间的联结与共鸣，包含爱与信任。",
+      source_block_id: "emo-para",
+      embedding: localProject("感情 联结 共鸣 爱 信任"),
+    },
+    {
+      space_id: SPACE,
+      note_id: "n-lvalue",
+      title: "什么是左值",
+      text: "C++ 中左值是可取地址的表达式。",
+      source_block_id: "lv-para",
+      embedding: localProject("什么是左值 C++ 表达式"),
+    },
+    {
+      space_id: SPACE,
+      note_id: "n-protobuf",
+      title: "什么是 ProtoBuf",
+      text: "Protocol Buffers 是一种序列化格式。",
+      source_block_id: "pb-para",
+      embedding: localProject("什么是 ProtoBuf 序列化"),
+    },
+    {
+      space_id: SPACE,
+      note_id: "n-heap",
+      title: "什么是堆",
+      text: "堆是动态内存分配区域。",
+      source_block_id: "heap-para",
+      embedding: localProject("什么是堆 内存"),
+    },
+  ];
+
+  it("query tokens for 什么是感情 emphasize 感情", () => {
+    const tokens = queryContentTokens("什么是感情");
+    expect(tokens).toEqual(["感情"]);
+    expect(toTsQueryTokens("什么是感情")).toBe("感情");
+  });
+
+  it("scoreChunk: note with 感情 outranks 什么是左值 for 什么是感情", () => {
+    const q = "什么是感情";
+    const emo = scoreChunk(q, zhCorpus[0]!);
+    const lv = scoreChunk(q, zhCorpus[1]!);
+    const pb = scoreChunk(q, zhCorpus[2]!);
+    expect(emo).toBeGreaterThan(lv);
+    expect(emo).toBeGreaterThan(pb);
+    expect(lv).toBe(0);
+    expect(pb).toBe(0);
+  });
+
+  it("hybridRetrieve prefers 感情 note over template-only tech notes", async () => {
+    const q = "什么是感情";
+    const qEmb = localProject(q);
+    const r = await hybridRetrieve(SPACE, q, { chunks: zhCorpus, queryEmbedding: qEmb });
+    expect(r.unknown).toBe(false);
+    expect(r.hits[0]?.note_id).toBe("n-emotion");
+    expect(r.hits.map((h) => h.note_id)).not.toContain("n-lvalue");
+    expect(r.hits.map((h) => h.note_id)).not.toContain("n-protobuf");
+    expect(r.hits.map((h) => h.note_id)).not.toContain("n-heap");
+  });
+
+  it("searchSourcesAndSimilar ranks 感情 above 什么是左值", () => {
+    const notes: SearchCorpusNote[] = zhCorpus.map((c) => ({
+      space_id: c.space_id,
+      note_id: c.note_id,
+      title: c.title,
+      path: `${c.note_id}.md`,
+      markdown: c.text,
+      chunks: [{ text: c.text, source_block_id: c.source_block_id, embedding: c.embedding }],
+    }));
+    const out = searchSourcesAndSimilar(SPACE, "什么是感情", notes);
+    expect(out.results[0]?.note_id).toBe("n-emotion");
+    expect(out.results.map((r) => r.note_id)).not.toContain("n-lvalue");
   });
 });

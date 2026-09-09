@@ -1,4 +1,10 @@
-import { toFtsTokens, toTsQueryTokens } from "@note-hub/core";
+import {
+  isCjkStopToken,
+  queryContentTokens,
+  stripCjkQueryStops,
+  toFtsTokens,
+  toTsQueryTokens,
+} from "@note-hub/core";
 import { cosine, formatVector, parseEmbedding, rrfMerge } from "./embed.ts";
 
 export const UNKNOWN_ANSWER = "不知道";
@@ -83,23 +89,84 @@ export function clipQuote(text: string, max = 200): string {
   return t.slice(0, max).trimEnd() + "…";
 }
 
+/** Lexical overlap count for content tokens in title/body. */
+export function contentTokenOverlap(
+  query: string,
+  chunk: { title: string; text: string; heading_path?: string | null },
+): number {
+  const content = queryContentTokens(query);
+  if (!content.length) return 0;
+  const title = chunk.title.toLowerCase();
+  const body = `${chunk.heading_path ?? ""} ${chunk.text}`.toLowerCase();
+  const titleTok = new Set(toFtsTokens(chunk.title).split(/\s+/).filter(Boolean));
+  const bodyTok = new Set(
+    toFtsTokens(`${chunk.heading_path ?? ""} ${chunk.text}`).split(/\s+/).filter(Boolean),
+  );
+  let hits = 0;
+  for (const tok of content) {
+    const t = tok.toLowerCase();
+    if (titleTok.has(t) || bodyTok.has(t) || title.includes(t) || body.includes(t)) hits++;
+  }
+  return hits;
+}
+
+/** True when chunk shares only question-template bigrams, not content tokens. */
+export function isTemplateOnlyMatch(
+  query: string,
+  chunk: { title: string; text: string; heading_path?: string | null },
+): boolean {
+  const content = queryContentTokens(query);
+  if (!content.length) return false;
+  if (contentTokenOverlap(query, chunk) > 0) return false;
+  const blob = new Set(
+    toFtsTokens(`${chunk.title} ${chunk.heading_path ?? ""} ${chunk.text}`)
+      .split(/\s+/)
+      .filter(Boolean),
+  );
+  const allQ = toFtsTokens(query).split(/\s+/).filter(Boolean);
+  return allQ.some((t) => isCjkStopToken(t) && blob.has(t.toLowerCase()));
+}
+
 export function scoreChunk(query: string, chunk: RetrieveChunk): number {
   const q = query.trim();
   if (!q) return 0;
   const qLower = q.toLowerCase();
   const title = chunk.title.toLowerCase();
   const body = `${chunk.heading_path ?? ""} ${chunk.text}`.toLowerCase();
+  const contentPhrase = stripCjkQueryStops(q).toLowerCase().replace(/\s+/g, "");
+  const contentTokens = queryContentTokens(q);
+
   let score = 0;
   if (title.includes(qLower)) score += 2;
   if (body.includes(qLower)) score += 1;
-  const qTokens = toFtsTokens(q).split(/\s+/).filter(Boolean);
-  if (qTokens.length === 0) return score;
+  if (contentPhrase && contentPhrase !== qLower) {
+    if (title.includes(contentPhrase)) score += 2.5;
+    if (body.includes(contentPhrase)) score += 1.5;
+  }
+
+  if (contentTokens.length === 0) return score;
+
   const titleTok = new Set(toFtsTokens(chunk.title).split(/\s+/).filter(Boolean));
   const bodyTok = new Set(toFtsTokens(`${chunk.heading_path ?? ""} ${chunk.text}`).split(/\s+/).filter(Boolean));
-  for (const tok of qTokens) {
+  let contentHits = 0;
+  for (const tok of contentTokens) {
     const t = tok.toLowerCase();
-    if (titleTok.has(t) || title.includes(t)) score += 0.5;
-    if (bodyTok.has(t) || body.includes(t)) score += 0.25;
+    const inTitle = titleTok.has(t) || title.includes(t);
+    const inBody = bodyTok.has(t) || body.includes(t);
+    if (inTitle) {
+      score += 1.2;
+      contentHits++;
+    } else if (inBody) {
+      score += 0.8;
+      contentHits++;
+    }
+  }
+
+  // Template-only overlap must not rank high when content tokens exist.
+  if (contentHits === 0) {
+    if (isTemplateOnlyMatch(q, chunk)) return 0;
+    // Exact full-query substring already scored above; otherwise no lexical credit.
+    return score > 0 ? score : 0;
   }
   return score;
 }
@@ -192,30 +259,68 @@ export async function hybridRetrieve(
     }
   }
 
-  if (!vecHits.length) {
+  const contentTokens = queryContentTokens(q);
+  // Drop / demote vector hits that only share question templates (什么/么是), not content.
+  let usableVec = vecHits;
+  if (contentTokens.length > 0 && vecHits.length) {
+    const kept: RetrieveHit[] = [];
+    const demoted: RetrieveHit[] = [];
+    for (const h of vecHits) {
+      const chunk = { title: h.title, text: h.text };
+      if (contentTokenOverlap(q, chunk) > 0) {
+        kept.push(h);
+      } else if (isTemplateOnlyMatch(q, chunk)) {
+        // filter template-only noise when we have content terms
+        continue;
+      } else {
+        // pure semantic (no lexical overlap): keep but demote later
+        demoted.push(h);
+      }
+    }
+    usableVec = [...kept, ...demoted];
+  }
+
+  if (!usableVec.length) {
     const hits = ftsHits.slice(0, limit);
     if (hits.length === 0) return { unknown: true, hits: [] };
     return { unknown: false, hits };
   }
 
+  // Prefer FTS lists that already match content; boost content-overlap keys in RRF order.
+  const ftsBoosted = [...ftsHits].sort((a, b) => {
+    const ca = contentTokenOverlap(q, { title: a.title, text: a.text });
+    const cb = contentTokenOverlap(q, { title: b.title, text: b.text });
+    return cb - ca || b.rank - a.rank || a.title.localeCompare(b.title, "zh");
+  });
+  const vecBoosted = [...usableVec].sort((a, b) => {
+    const ca = contentTokenOverlap(q, { title: a.title, text: a.text });
+    const cb = contentTokenOverlap(q, { title: b.title, text: b.text });
+    return cb - ca || a.title.localeCompare(b.title, "zh");
+  });
+
   const byKey = new Map<string, RetrieveHit>();
-  for (const h of [...ftsHits, ...vecHits]) {
+  for (const h of [...ftsBoosted, ...vecBoosted]) {
     const k = hitKey(h);
     if (!byKey.has(k)) byKey.set(k, h);
   }
   const fused = rrfMerge(
-    [ftsHits.map(hitKey), vecHits.map(hitKey)],
+    [ftsBoosted.map(hitKey), vecBoosted.map(hitKey)],
     60,
   );
   const hits: RetrieveHit[] = [];
   for (const row of fused) {
     const h = byKey.get(row.id);
     if (!h) continue;
-    hits.push({ ...h, rank: row.score });
+    const overlap = contentTokens.length
+      ? contentTokenOverlap(q, { title: h.title, text: h.text })
+      : 0;
+    // Content overlap boosts fused rank; template-filtered vec already gone.
+    hits.push({ ...h, rank: row.score + overlap * 0.15 });
     if (hits.length >= limit) break;
   }
+  hits.sort((a, b) => b.rank - a.rank || a.title.localeCompare(b.title, "zh"));
   if (hits.length === 0) return { unknown: true, hits: [] };
-  return { unknown: false, hits };
+  return { unknown: false, hits: hits.slice(0, limit) };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

@@ -805,7 +805,7 @@ const SEARCH_CACHE_TTL_SEC = 90;
 
 function searchCacheKey(spaceId: string, q: string): string {
   const h = createHash("sha256").update(q).digest("hex").slice(0, 40);
-  return `search:cache:v1:${spaceId}:${h}`;
+  return `search:cache:v2:${spaceId}:${h}`;
 }
 
 async function recordSearchHistory(userId: string, spaceId: string, q: string): Promise<void> {

@@ -1,6 +1,8 @@
 export {
   hybridRetrieve,
   scoreChunk,
+  contentTokenOverlap,
+  isTemplateOnlyMatch,
   previewUrl,
   clipQuote,
   loadChunksViaSql,

@@ -1,4 +1,4 @@
-import { toFtsTokens } from "@note-hub/core";
+import { queryContentTokens, toFtsTokens } from "@note-hub/core";
 import { cosine } from "./embed.ts";
 import { clipQuote, previewUrl, scoreChunk } from "./hybrid.ts";
 
@@ -76,12 +76,13 @@ function sourceMatch(
   const titleHit = includesFold(note.title, qTrim);
   const bodyHit =
     includesFold(markdown, qTrim) || chunks.some((c) => includesFold(c.text, qTrim));
-  const tokens = toFtsTokens(qTrim).split(/\s+/).filter(Boolean);
+  const tokens = queryContentTokens(qTrim);
   let tokenHit = false;
   if (tokens.length) {
     const blob = toFtsTokens(`${note.title} ${note.path} ${markdown} ${chunks.map((c) => c.text).join(" ")}`);
     const set = new Set(blob.split(/\s+/).filter(Boolean));
-    tokenHit = tokens.some((t) => set.has(t));
+    const hay = `${note.title} ${note.path} ${markdown} ${chunks.map((c) => c.text).join(" ")}`.toLowerCase();
+    tokenHit = tokens.some((t) => set.has(t) || hay.includes(t.toLowerCase()));
   }
   if (!pathHit && !titleHit && !bodyHit && !tokenHit && bestRank <= 0) return null;
   const snippetSrc = bestChunk?.text || markdown || note.title;
