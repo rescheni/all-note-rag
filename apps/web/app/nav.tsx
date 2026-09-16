@@ -64,6 +64,15 @@ export function Nav() {
   const [spaceId, setSpaceId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [me, setMe] = useState<MeUser | null>(null);
+  // 服务端注册开关；false 时隐藏「注册」入口
+  const [allowRegister, setAllowRegister] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    api<{ allow_registration: boolean }>("/v1/auth/config")
+      .then((c) => setAllowRegister(Boolean(c.allow_registration)))
+      // 配置接口不可用时不阻断导航，保守显示注册入口
+      .catch(() => setAllowRegister(true));
+  }, []);
   const navRef = useRef<HTMLElement>(null);
   const indRef = useRef<HTMLSpanElement>(null);
 
@@ -231,9 +240,11 @@ export function Nav() {
               <NavLink href="/login" icon={<IconLogin />} onNavigate={closeMenu}>
                 登录
               </NavLink>
-              <NavLink href="/register" icon={<IconLogin />} onNavigate={closeMenu}>
-                注册
-              </NavLink>
+              {allowRegister !== false && (
+                <NavLink href="/register" icon={<IconLogin />} onNavigate={closeMenu}>
+                  注册
+                </NavLink>
+              )}
             </>
           )}
         </nav>
