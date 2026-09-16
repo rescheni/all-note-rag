@@ -1,7 +1,17 @@
-# syntax=docker/dockerfile:1
 # context: repo root
 FROM node:22-bookworm-slim AS base
-RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
+ENV npm_config_sharp_binary_host=https://registry.npmmirror.com/-/binary/sharp \
+    npm_config_sharp_libvips_binary_host=https://registry.npmmirror.com/-/binary/sharp-libvips
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+RUN npm config set registry https://registry.npmmirror.com \
+ && corepack enable \
+ && corepack prepare pnpm@9.15.9 --activate \
+ && pnpm config set registry https://registry.npmmirror.com --global || npm i -g pnpm@9.15.9 --registry=https://registry.npmmirror.com
+# compile deps for sharp(node-gyp fallback)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -17,7 +27,9 @@ COPY packages/normalize/package.json packages/normalize/package.json
 COPY packages/preview/package.json packages/preview/package.json
 COPY packages/retrieve/package.json packages/retrieve/package.json
 COPY packages/skills-runtime/package.json packages/skills-runtime/package.json
-RUN pnpm install --frozen-lockfile --filter @note-hub/api...
+RUN npm_config_sharp_binary_host=https://registry.npmmirror.com/-/binary/sharp \
+    npm_config_sharp_libvips_binary_host=https://registry.npmmirror.com/-/binary/sharp-libvips \
+    pnpm install --frozen-lockfile --filter @note-hub/api...
 
 FROM deps AS api
 COPY packages packages

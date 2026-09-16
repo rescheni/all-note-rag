@@ -1,9 +1,19 @@
-# syntax=docker/dockerfile:1
 # context: repo root
 FROM node:22-bookworm-slim AS base
 RUN set -eux; for i in 1 2 3 4 5; do apt-get update && break || sleep 4; done; apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng poppler-utils antiword ca-certificates && rm -rf /var/lib/apt/lists/* && tesseract --list-langs && tesseract --list-langs 2>/dev/null | grep -E '^(eng|chi_sim)$'
 ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
-RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
+ENV npm_config_sharp_binary_host=https://registry.npmmirror.com/-/binary/sharp \
+    npm_config_sharp_libvips_binary_host=https://registry.npmmirror.com/-/binary/sharp-libvips
+ENV COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+RUN npm config set registry https://registry.npmmirror.com \
+ && corepack enable \
+ && corepack prepare pnpm@9.15.9 --activate \
+ && pnpm config set registry https://registry.npmmirror.com --global || npm i -g pnpm@9.15.9 --registry=https://registry.npmmirror.com
+# compile deps for sharp(node-gyp fallback)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ pkg-config \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 FROM base AS deps
@@ -18,7 +28,9 @@ COPY packages/normalize/package.json packages/normalize/package.json
 COPY packages/preview/package.json packages/preview/package.json
 COPY packages/retrieve/package.json packages/retrieve/package.json
 COPY packages/skills-runtime/package.json packages/skills-runtime/package.json
-RUN pnpm install --frozen-lockfile --filter @note-hub/worker...
+RUN npm_config_sharp_binary_host=https://registry.npmmirror.com/-/binary/sharp \
+    npm_config_sharp_libvips_binary_host=https://registry.npmmirror.com/-/binary/sharp-libvips \
+    pnpm install --frozen-lockfile --filter @note-hub/worker...
 
 FROM deps AS worker
 COPY packages packages

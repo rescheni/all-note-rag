@@ -6,6 +6,21 @@ function req(name: string, fallback?: string): string {
   return v;
 }
 
+/** 解析布尔型环境变量；空/未设 → fallback */
+function boolEnv(name: string, fallback: boolean): boolean {
+  const v = (process.env[name] ?? "").trim().toLowerCase();
+  if (!v) return fallback;
+  return ["1", "true", "yes", "on", "enabled"].includes(v);
+}
+
+/** 解析正整数环境变量；非法/未设 → fallback */
+function intEnv(name: string, fallback: number): number {
+  const raw = (process.env[name] ?? "").trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
 function warnInsecureHubSecret(secret: string): void {
   if (secret !== INSECURE_DEFAULT_HUB_SECRET) return;
   console.warn(
@@ -28,6 +43,22 @@ export const env = {
   apiPort: Number(req("API_PORT", "3001")),
   webOrigin: req("WEB_ORIGIN", "http://127.0.0.1:3000"),
   vaultBucket: req("VAULT_BUCKET", "obsidian-src"),
+
+  // ── 账号与安全防护 ───────────────────────────────────────────
+  /** 是否开放自助注册。false = 仅已有账号可登录（公网部署建议关闭） */
+  allowRegistration: boolEnv("ALLOW_REGISTRATION", true),
+  /** 登录：窗口期内允许的失败次数，超过即临时锁定 */
+  loginMaxAttempts: intEnv("LOGIN_MAX_ATTEMPTS", 5),
+  /** 登录：失败计数窗口（分钟） */
+  loginWindowMinutes: intEnv("LOGIN_WINDOW_MINUTES", 15),
+  /** 登录：触发后锁定时长（分钟） */
+  loginLockMinutes: intEnv("LOGIN_LOCK_MINUTES", 15),
+  /** 注册：同一 IP 在窗口期内的最大注册数（0 = 不限制） */
+  registerMaxPerIp: intEnv("REGISTER_MAX_PER_IP", 5),
+  /** 注册：IP 计数窗口（分钟） */
+  registerWindowMinutes: intEnv("REGISTER_WINDOW_MINUTES", 60),
+  /** 是否信任反向代理的 X-Forwarded-For（反代后部署请保持开启） */
+  trustProxy: boolEnv("TRUST_PROXY", true),
 };
 
 const DEFAULT_NOTION_REDIRECT = "http://127.0.0.1:3000/v1/connections/oauth/notion/callback";

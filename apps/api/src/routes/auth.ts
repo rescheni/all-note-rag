@@ -14,10 +14,30 @@ import {
   verifyPassword,
   type AuthUser,
 } from "../auth.ts";
+import { checkLimit, recordFailure, resetLimit } from "../rate-limit.ts";
 import type { Context } from "hono";
 
 type Vars = { user: AuthUser };
 type AuthCtx = Context<{ Variables: Vars }>;
+
+/**
+ * 取客户端 IP。部署在反向代理（如 lucky / nginx / Cloudflare）后面时，
+ * 真实 IP 在 X-Forwarded-For 的第一段；TRUST_PROXY=false 时忽略该头。
+ */
+function clientIp(c: AuthCtx): string {
+  if (env.trustProxy) {
+    const xff = c.req.header("x-forwarded-for");
+    if (xff) {
+      const first = xff.split(",")[0]?.trim();
+      if (first) return first;
+    }
+    const xri = c.req.header("x-real-ip");
+    if (xri) return xri.trim();
+  }
+  // Hono/Bun/Node 适配层可能提供 remote address；拿不到则退化为固定串
+  const info = (c.req as unknown as { raw?: { socket?: { remoteAddress?: string } } }).raw;
+  return info?.socket?.remoteAddress ?? "unknown";
+}
 
 export const authRoutes = new Hono<{ Variables: Vars }>();
 
@@ -165,7 +185,33 @@ async function revealToken(c: AuthCtx) {
   }
 }
 
+/** 公开配置：前端据此决定是否展示注册入口与提示 */
+authRoutes.get("/auth/config", (c) => {
+  return c.json({
+    allow_registration: env.allowRegistration,
+    login_max_attempts: env.loginMaxAttempts,
+    login_lock_minutes: env.loginLockMinutes,
+  });
+});
+
 authRoutes.post("/auth/register", async (c) => {
+  // ① 注册开关：关闭后仅已有账号可登录
+  if (!env.allowRegistration) {
+    return jsonError(c, 403, "registration_disabled", "本站已关闭自助注册，请联系管理员开通账号");
+  }
+
+  // ② 同 IP 注册频率限制（防批量注册）
+  const regIp = clientIp(c);
+  const regKey = `register:${regIp}`;
+  if (env.registerMaxPerIp > 0) {
+    const pre = checkLimit(regKey, env.registerMaxPerIp, env.registerWindowMinutes * 60_000);
+    if (!pre.allowed) {
+      c.header("Retry-After", String(pre.retryAfterSec ?? 60));
+      const mins = Math.max(1, Math.ceil((pre.retryAfterSec ?? 60) / 60));
+      return jsonError(c, 429, "too_many_requests", `注册过于频繁，请约 ${mins} 分钟后再试`);
+    }
+  }
+
   const body = await c.req.json().catch(() => ({})) as {
     email?: string;
     password?: string;
@@ -193,6 +239,10 @@ authRoutes.post("/auth/register", async (c) => {
   }
   const token = signToken(out.user.id);
   setSessionCookie(c, token);
+  // ③ 计入该 IP 的注册次数（成功也计数，用于频率限制）
+  if (env.registerMaxPerIp > 0) {
+    recordFailure(regKey, env.registerMaxPerIp, env.registerWindowMinutes * 60_000, env.registerWindowMinutes * 60_000);
+  }
   return c.json({ user: out.user, space: out.space, token }, 201);
 });
 
@@ -200,14 +250,49 @@ authRoutes.post("/auth/login", async (c) => {
   const body = await c.req.json().catch(() => ({})) as { email?: string; password?: string };
   const email = (body.email ?? "").trim().toLowerCase();
   const password = body.password ?? "";
+
+  // ── 防暴力破解：按「邮箱」和「IP」双维度限流 ──────────────────
+  const ip = clientIp(c);
+  const emailKey = `login:email:${email || "unknown"}`;
+  const ipKey = `login:ip:${ip}`;
+  const windowMs = env.loginWindowMinutes * 60_000;
+  const lockMs = env.loginLockMinutes * 60_000;
+  // IP 维度放宽（防止单 IP 撞库扫多个账号，同时不误伤共用出口的正常用户）
+  const ipMax = Math.max(env.loginMaxAttempts * 4, env.loginMaxAttempts);
+
+  for (const [key, max] of [[emailKey, env.loginMaxAttempts], [ipKey, ipMax]] as const) {
+    const pre = checkLimit(key, max, windowMs);
+    if (!pre.allowed) {
+      c.header("Retry-After", String(pre.retryAfterSec ?? 60));
+      return jsonError(
+        c, 429, "too_many_attempts",
+        `登录尝试过于频繁，请 ${pre.retryAfterSec ?? 60} 秒后再试`,
+      );
+    }
+  }
+
   const r = await query<{ id: string; email: string; display_name: string | null; password_hash: string }>(
     "SELECT id, email, display_name, password_hash FROM users WHERE email = $1",
     [email],
   );
   const row = r.rows[0];
   if (!row || !(await verifyPassword(password, row.password_hash))) {
-    return jsonError(c, 401, "unauthenticated", "邮箱或密码错误");
+    // 失败计数：两个维度都记
+    const a = recordFailure(emailKey, env.loginMaxAttempts, windowMs, lockMs);
+    const b = recordFailure(ipKey, ipMax, windowMs, lockMs);
+    if (a.locked || b.locked) {
+      const wait = Math.max(a.retryAfterSec ?? 0, b.retryAfterSec ?? 0) || 60;
+      c.header("Retry-After", String(wait));
+      return jsonError(c, 429, "too_many_attempts", `失败次数过多，账号已临时锁定，请 ${wait} 秒后再试`);
+    }
+    const remain = Math.min(a.remaining, b.remaining);
+    return jsonError(c, 401, "unauthenticated", `邮箱或密码错误（还可尝试 ${remain} 次）`);
   }
+
+  // 登录成功 → 清除失败计数
+  resetLimit(emailKey);
+  resetLimit(ipKey);
+
   const token = signToken(row.id);
   setSessionCookie(c, token);
   return c.json({
