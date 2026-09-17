@@ -401,7 +401,15 @@ oauthRoutes.get("/connections/oauth/feishu/callback", async (c) => {
       clientSecret: client.clientSecret,
       redirectUri: oauthCallbackRedirectUri(pageOrigin(origin), "feishu"),
     });
-  } catch {
+  } catch (e) {
+    // 记录飞书返回的真实错误码/消息，便于排查（配置错误 / code 过期 / redirect_uri 不匹配等）
+    console.error(JSON.stringify({
+      level: "error",
+      message: "feishu token exchange failed",
+      error: e instanceof Error ? e.message : String(e),
+      redirect_uri: oauthCallbackRedirectUri(pageOrigin(origin), "feishu"),
+      space_id: payload.sid,
+    }));
     return c.redirect(oauthErrorUrl("飞书换票失败，请重新扫码登录。", payload.cid, "feishu", origin), 302);
   }
 
