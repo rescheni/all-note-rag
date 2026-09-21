@@ -6,11 +6,13 @@
  * Tools: search_notes | get_note | list_connections | list_spaces
  */
 import { Hono } from "hono";
-import { toTsQueryTokens } from "@note-hub/core";
-import { clipQuote, previewUrl } from "@note-hub/retrieve";
+import { loadAiSettings, toTsQueryTokens } from "@note-hub/core";
+import { clipQuote, embedTexts, previewUrl } from "@note-hub/retrieve";
 import { query } from "../db.ts";
+import { env } from "../env.ts";
 import { jsonError } from "../errors.ts";
 import { requireRole, requireUser, type AuthUser } from "../auth.ts";
+import { similarNotesInSpace } from "./notes.ts";
 
 type Vars = { user: AuthUser };
 export const mcpRoutes = new Hono<{ Variables: Vars }>();
@@ -36,7 +38,10 @@ type ToolDef = {
 const TOOLS: ToolDef[] = [
   {
     name: "search_notes",
-    description: "在笔记中枢当前用户可见的空间内搜索笔记（标题 / 路径 / 全文）。返回标题、路径、摘要与 note_id。",
+    description:
+      "在笔记中枢当前用户可见的空间内搜索笔记。同时做关键词检索（标题/路径/全文）与语义检索（向量相似度）。" +
+      "返回 results（关键词命中）与 similar（语义相关，含 score 相似度）。" +
+      "中文提问建议直接用自然语言，例如「怎么保护眼睛」，语义结果往往比关键词更有用。",
     inputSchema: {
       type: "object",
       properties: {
@@ -176,6 +181,27 @@ async function toolSearchNotes(userId: string, args: Record<string, unknown>) {
      LIMIT $6`,
     [spaceId, like, fts, userId, gate.mem.role, limit],
   );
+
+  // 语义检索（pgvector 余弦相似）：关键词召回不到、但语义相关的笔记靠这段补。
+  // 中文场景尤其关键 —— 例如搜「怎么保护眼睛」也能命中「用眼卫生」类笔记。
+  let similar: Awaited<ReturnType<typeof similarNotesInSpace>> = [];
+  try {
+    const ai = await loadAiSettings(query, env.hubSecret);
+    const [emb] = await embedTexts([q], {
+      baseUrl: ai.base_url,
+      apiKey: ai.api_key,
+      model: ai.embedding_model,
+      provider: ai.embed_provider,
+    });
+    if (emb?.length) {
+      similar = await similarNotesInSpace(spaceId, emb, [], userId, gate.mem.role, limit);
+    }
+  } catch (e) {
+    console.error(
+      JSON.stringify({ level: "error", message: "mcp semantic search failed", error: String(e) }),
+    );
+  }
+
   return {
     space_id: spaceId,
     query: q,
@@ -188,6 +214,7 @@ async function toolSearchNotes(userId: string, args: Record<string, unknown>) {
       source_block_id: row.source_block_id,
       preview_url: previewUrl(row.id, row.source_block_id),
     })),
+    similar,
   };
 }
 

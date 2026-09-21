@@ -714,7 +714,7 @@ type SimilarRow = {
   score: number | string | null;
 };
 
-async function similarNotesInSpace(
+export async function similarNotesInSpace(
   spaceId: string,
   embedding: number[],
   excludeIds: string[],
@@ -774,7 +774,13 @@ async function noteAverageEmbedding(noteId: string): Promise<number[]> {
   return averageVectors(vecs);
 }
 
-const SEARCH_SIMILAR_BUDGET_MS = 400;
+// 语义检索预算：本地 ONNX 模型首次加载需数秒，400ms 会导致向量结果被永久跳过。
+// 默认放宽到 3s，可用 SEARCH_SIMILAR_BUDGET_MS 覆盖（设为 0 则禁用语义检索）。
+const SEARCH_SIMILAR_BUDGET_MS = (() => {
+  const raw = Number(process.env.SEARCH_SIMILAR_BUDGET_MS);
+  if (Number.isFinite(raw) && raw >= 0) return raw;
+  return 3000;
+})();
 
 function withBudget<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   return new Promise((resolve) => {

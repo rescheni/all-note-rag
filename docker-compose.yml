@@ -147,6 +147,8 @@ services:
       start_period: 15s
 
   worker:
+    cpus: "2.0"
+    mem_limit: 2g
     restart: unless-stopped
     dns: *default-dns
     image: note-hub-worker
